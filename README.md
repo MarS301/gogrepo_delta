@@ -31,6 +31,7 @@ library and helps you maintain a dependable, verifiable local collection.
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
 | **Upstream project** | [kalanyr/gogrepoc](https://github.com/kalanyr/gogrepoc) |
+[![Python CI](https://github.com/MarS301/gogrepo_delta/actions/workflows/tests.yml/badge.svg)](https://github.com/MarS301/gogrepo_delta/actions/workflows/tests.yml)
 
 ## Table of contents
 
