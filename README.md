@@ -1,4 +1,4 @@
-gogrepo gamma
+gogrepo delta
 --------------
 Python-based tool for downloading your GOG.com game collections and extras to your local computer for full offline enjoyment.
 
@@ -8,6 +8,8 @@ By default, game folders are saved in the same location that the script is run i
 directory. Run gogrepo.py -h to see help or read more below. Each game has its own directories with all game/bonus files saved within.
 
 License: GPLv3+
+
+This is a feature extended version of gogrepoc
 
 Features
 --------
