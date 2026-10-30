@@ -1,706 +1,511 @@
-gogrepo_delta
+<div align="center">
 
-Python-based tool for downloading and managing your GOG.com game collection and extras for full offline enjoyment.
+# gogrepo_delta
 
-gogrepo_delta.py is a standalone Python script based on gogrepoc. It allows you to maintain a local copy of your GOG library, including game installers, bonus content, metadata and optional game artwork.
+**Build and maintain your own offline copy of your GOG.com game library.**
 
-The script can be run from anywhere using Python 3.10 or later. It uses a local manifest to keep track of your GOG library and downloaded files.
+A community-maintained Python tool for cataloguing, downloading, verifying, importing,
+backing up, and organizing GOG installers and bonus content.
 
-By default, game folders are saved in the directory from which the script is run. You can also specify another directory. Each game gets its own directory containing its installers and bonus files.
+[![Version](https://img.shields.io/badge/version-0.15.19-blue)](https://github.com/kalanyr/gogrepoc)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](https://www.gnu.org/licenses/gpl-3.0.html)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
 
-License: GPLv3+
+</div>
 
-Current version: 0.15.19
+`gogrepo_delta.py` is a standalone continuation and refactoring of
+[gogrepoc](https://github.com/kalanyr/gogrepoc). It keeps a local manifest of your GOG
+library and helps you maintain a dependable, verifiable local collection.
 
-Features
-Download games and extras from your GOG library.
-Select games based on operating system (Windows, Linux, macOS) and language.
-Automatically detect your system's operating system and language.
-Automatically fall back to English when a game does not have an installer in your default language.
-Support for standalone and GOG Galaxy installers, including shared files.
-Save a !info.txt file in each game directory containing information about the game and its downloadable files.
-Save a !serial.txt file when a game has serial numbers or CD keys.
-Optionally download game cover images and background artwork.
-Verify downloaded files using MD5 checksums, expected file sizes and ZIP integrity checks.
-Support for multipart ZIP archives.
-Automatically retry failed downloads when GOG servers report temporary errors.
-Resume interrupted downloads where possible, using verified download chunks.
-Import existing local collections by matching MD5 checksums.
-Incrementally back up existing collections.
-Identify and clean files that are no longer present in the manifest.
-Remove orphaned files and obsolete installers.
-Export your library information to a CSV spreadsheet.
-Search and list games in your local manifest.
-Configurable download threads, HTTP retries, timeouts and other settings.
-Automatically generate a configuration file with explanations of available settings.
-Detailed logging and end-of-run summaries.
-Suitable for scheduled tasks and daily cronjobs.
-Quick Start – Typical Use Case
-1. Authenticate with GOG
+> [!IMPORTANT]
+> This is an independent community project. It is not affiliated with, endorsed by, or
+> supported by GOG.
 
-Log in to GOG and save your authentication token locally.
+## Project at a glance
 
-bash
+| | |
+| --- | --- |
+| **Current version** | `0.15.19` |
+| **Python requirement** | Python 3.10 or newer |
+| **License** | GPL-3.0-or-later |
+| **Main script** | `gogrepo_delta.py` |
+| **Upstream project** | [kalanyr/gogrepoc](https://github.com/kalanyr/gogrepoc) |
+
+## Table of contents
+
+- [Features](#features)
+- [Requirements and installation](#requirements-and-installation)
+  - [Required dependencies](#required-dependencies)
+  - [Optional dependencies](#optional-dependencies)
+- [Quick start](#quick-start)
+  - [1. Sign in to GOG](#1-sign-in-to-gog)
+  - [2. Update the manifest](#2-update-the-manifest)
+  - [3. Download games and extras](#3-download-games-and-extras)
+  - [4. Verify your collection](#4-verify-your-collection)
+- [Commands](#commands)
+  - [login](#login)
+  - [update](#update)
+  - [download](#download)
+  - [verify](#verify)
+  - [import](#import)
+  - [backup](#backup)
+  - [list](#list)
+  - [export](#export)
+  - [clean](#clean)
+  - [clear_partial_downloads](#clear_partial_downloads)
+  - [trash](#trash)
+  - [diagnostics](#diagnostics)
+- [Operating system and language selection](#operating-system-and-language-selection)
+- [Configuration](#configuration)
+- [Files and data safety](#files-and-data-safety)
+  - [Manifest format and recovery](#manifest-format-and-recovery)
+- [Logging and exit codes](#logging-and-exit-codes)
+- [Troubleshooting](#troubleshooting)
+- [Credits and links](#credits-and-links)
+- [Changelog](#changelog)
+
+## Features
+
+- Download GOG game installers, Galaxy installers, shared installers, and bonus content.
+- Select games by ID or title, operating system, and language.
+- Detect the computer's operating system and language automatically.
+- Use English as a fallback when the detected language is unavailable (unless language selection is explicitly supplied).
+- Resume interrupted downloads using verified chunks where checksum data is available.
+- Verify file sizes, MD5 checksums, and ZIP archive integrity.
+- Import existing collections by matching MD5 checksums.
+- Create incremental backups.
+- Move files not represented in the manifest into an orphaned area, and optionally remove duplicates or obsolete files.
+- Download cover and background artwork.
+- Store game information, serial numbers, and available changelogs alongside the collection.
+- Export the manifest to a spreadsheet-friendly CSV file.
+- Search and list games in the manifest.
+- Configure command defaults, network behaviour, logging, and download performance.
+- Write manifests safely using atomic file replacement and keep backup copies.
+- Produce end-of-run summaries and meaningful exit codes for automation.
+
+## Requirements and installation
+
+### Required dependencies
+
+- Python **3.10 or newer**
+- `html5lib`
+- `requests`
+- `psutil`
+
+Install the required packages:
+
+```bash
+python -m pip install html5lib requests psutil
+```
+
+Download `gogrepo_delta.py` into a working directory and run it with Python:
+
+```bash
+python gogrepo_delta.py --help
+```
+
+The script must be started with a Python interpreter; do not execute it as a shell script.
+
+### Optional dependencies
+
+- `html2text` (2015.6.21 or newer): converts downloaded GOG changelogs from HTML to readable text.
+
+  ```bash
+  python -m pip install html2text
+  ```
+
+- **Linux/Unix:** PyQt5 with QtDBus support can be used for desktop-session sleep inhibition where supported.
+- **macOS:** PyObjC components, including CoreFoundation support, are used for macOS-specific power-management functionality.
+- **Windows:** required Windows API calls use Python's built-in `ctypes` module.
+
+## Quick start
+
+Run the commands below from the directory in which you want the program's working files (manifest, token, log, and configuration) to live. The game files themselves can be stored elsewhere.
+
+### 1. Sign in to GOG
+
+```bash
 python gogrepo_delta.py login
+```
 
+Enter your GOG username/email when prompted. If the password is not supplied as an argument, it is requested securely.
 
-You will be prompted for your GOG username/email and password.
+If automatic login is blocked by a CAPTCHA or a changed GOG login page, use browser login:
 
-Alternatively, use browser authentication:
+```bash
+python gogrepo_delta.py login --browser
+```
 
-bash
-python gogrepo_delta.py login -browser
+A browser sign-in page is opened (or its address is displayed). Sign in, then paste the resulting URL when prompted. The authentication token is stored locally in `gog-token.dat`.
 
+**Security:** Do not pass your password on the command line. Command-line passwords can be exposed through shell history and process listings; this form is deprecated.
 
-This opens the GOG sign-in page in your browser. After signing in, copy and paste the resulting browser URL when prompted.
+### 2. Update the manifest
 
-Browser authentication is particularly useful when GOG requires a CAPTCHA or the automatic login process does not work.
-
-Your authentication token is saved in gog-token.dat. You generally only need to authenticate once.
-
-Security note: Avoid supplying your password directly on the command line, as it may be visible in shell history and process listings.
-
-2. Update your local manifest
-
-Fetch information about your GOG library, including game titles, download links, serial numbers, checksums and file sizes.
-
-bash
+```bash
 python gogrepo_delta.py update
+```
 
+This retrieves library information from GOG and updates `gog-manifest.dat`. The standard update checks new and updated games. The default operating system and language are detected from the current computer.
 
-The manifest is saved as gog-manifest.dat.
+### 3. Download games and extras
 
-By default, the update checks for new and updated games and uses your system's detected operating system and language.
-
-Run this command whenever you want to discover newly added games or updated content.
-
-3. Download your games
-
-Download games and bonus content using the information stored in the manifest.
-
-bash
+```bash
 python gogrepo_delta.py download
+```
 
+Downloads the files selected by the manifest and the current OS/language defaults. To use a different destination:
 
-By default, only files matching your detected operating system and language are selected. English is used as a fallback when your default language is unavailable for a particular operating system.
+```bash
+python gogrepo_delta.py download "/path/to/GOG games"
+```
 
-You can specify another destination directory:
+### 4. Verify your collection
 
-bash
-python gogrepo_delta.py download /path/to/games
-
-4. Verify your collection
-
-Check your downloaded files against the manifest.
-
-bash
+```bash
 python gogrepo_delta.py verify
+```
 
+The verifier checks file sizes, MD5 checksums, and ZIP integrity. By default, files that fail verification are cleaned out of the collection (not silently treated as valid).
 
-Verification checks expected file sizes, MD5 checksums and ZIP archive integrity.
+### 5. Keep the collection up to date
 
-Files that fail verification are reported and, by default, moved out of the collection for cleanup.
+Run these commands periodically:
 
-5. Repeat regularly
-
-To keep your collection up to date, periodically run:
-
-bash
+```bash
 python gogrepo_delta.py update
 python gogrepo_delta.py download
 python gogrepo_delta.py verify
+```
 
+Updates and downloads are incremental. Interrupted downloads can be resumed where sufficient verified data is available.
 
-The script is designed to support incremental updates and interrupted downloads.
+## Commands
 
-Advanced Usage – Common Tasks
-Update only new games
+Every command supports `-h` or `--help`. Both the original single-dash long options (`-skipos`) and GNU-style double-dash options (`--skipos`) are accepted.
 
-Add games that are not already present in your manifest:
+| Command | Purpose |
+| --- | --- |
+| `login` | Authenticate with GOG and save a local token. |
+| `update` | Fetch library metadata and update the manifest. |
+| `download` | Download installers and extras listed in the manifest. |
+| `verify` | Check downloaded files against manifest data. |
+| `import` | Import existing files by matching MD5 checksums. |
+| `backup` | Create an incremental copy of a collection. |
+| `list` | List or search games in the manifest. |
+| `export` | Export manifest entries to CSV. |
+| `clean` | Move files unknown to the manifest into `!orphaned`. |
+| `clear_partial_downloads` | Remove incomplete download files. |
+| `trash` | Permanently remove selected orphaned/duplicate files. |
+| `diagnostics` | Generate diagnostic information for troubleshooting. |
 
-bash
-python gogrepo_delta.py update -skipknown
+### `login`
 
-Update only games marked as updated
-bash
-python gogrepo_delta.py update -updateonly
+```bash
+python gogrepo_delta.py login
+python gogrepo_delta.py login --browser
+```
 
-Update your entire GOG library
-bash
-python gogrepo_delta.py update -full
+Options:
+- `username` (optional): GOG username or email.
+- `password` (optional, deprecated): avoid supplying this; otherwise it may be exposed in shell history and process listings.
+- `--browser`: use browser-based sign-in. Username and password arguments are ignored with a warning.
 
-Update specific games
-bash
-python gogrepo_delta.py update -ids trine_2_complete_story
+### `update`
 
+```bash
+python gogrepo_delta.py update
+python gogrepo_delta.py update --full
+python gogrepo_delta.py update --ids game_id another_game_id
+```
 
-Multiple games can be specified:
+Useful options:
+- `--standard`: update new and updated games (default unless `--ids` is used).
+- `--skipknown`: only update games not already in the manifest.
+- `--updateonly`: only update games GOG marks as updated.
+- `--full`: update all games in the account.
+- `--ids ID ...` / `--skipids ID ...`: include or exclude selected games.
+- `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
+- `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
+- `--skiphidden`: skip games marked as hidden.
+- `--resumemode {noresume,resume,onlyresume}`: control update resuming (default: `resume`).
+- `--strictverify`: clear a previous verified state unless the MD5 matches.
+- `--strictdupe`: use stricter duplicate matching when MD5 data is missing.
+- `--lenientdownloadsupdate`: do not mark installers for update solely because their update timestamp changed when MD5 data is unavailable or differs.
+- `--strictextrasupdate`: mark extras for update when their timestamps change, even if name and size match.
+- `--md5xmls`: download available MD5 XML files.
+- `--nochangelogs`: do not save game changelogs.
+- `--diagnostic`: perform more exhaustive GOG data checks (slower and more verbose).
+- `--wait HOURS`: wait before starting.
+- `--installers {standalone,both}`: legacy installer selection option (deprecated).
 
-bash
-python gogrepo_delta.py update -ids trine_2_complete_story witcher_3
+### `download`
 
-Download specific games
-bash
-python gogrepo_delta.py download -ids trine_2_complete_story
+```bash
+python gogrepo_delta.py download
+python gogrepo_delta.py download "/path/to/GOG games" --dryrun
+python gogrepo_delta.py download --ids game_id
+```
 
-Download Windows games in English and German
-bash
-python gogrepo_delta.py download -os windows -lang en de
+Useful options:
+- `--dryrun`: show what would be downloaded without downloading.
+- `--ids ID ...` / `--skipids ID ...`: include or exclude games.
+- `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
+- `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
+- `--skipextras`: skip bonus content.
+- `--skipgames`: skip game installers (deprecated).
+- `--skipgalaxy`, `--skipstandalone`, `--skipshared`: skip the respective installer groups (legacy/deprecated options).
+- `--skipfiles FILE ...`: skip filenames or glob patterns.
+- `--covers`: download cover images.
+- `--backgrounds`: download background images.
+- `--nocleanimages`: delete old artwork instead of cleaning it up.
+- `--downloadlimit MB`: approximate download limit in megabytes.
+- `--skippreallocation`: do not preallocate disk space.
+- `--wait HOURS`: wait before starting.
 
-Download game artwork
+### `verify`
 
-Download cover images:
+```bash
+python gogrepo_delta.py verify
+python gogrepo_delta.py verify "/path/to/GOG games" --forceverify
+```
 
-bash
-python gogrepo_delta.py download -covers
+Useful options:
+- `--forceverify`: also verify files unchanged since their last successful verification.
+- `--skipmd5`, `--skipsize`, `--skipzip`: skip the corresponding check.
+- `--delete`: permanently delete files that fail integrity checks.
+- `--noclean`: leave files that fail integrity checks in place.
+- `--clean`: deprecated; cleaning is already the default.
+- `--ids ID ...` / `--skipids ID ...`: include or exclude games.
+- `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
+- `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
+- `--skipfiles FILE ...`: skip filenames or glob patterns.
+- `--skipextras`, `--skipgames`, `--skipgalaxy`, `--skipstandalone`, `--skipshared`: limit the file types checked.
+- `--highmemory`: use memory for multipart ZIP testing; at least 50 GB of available memory is recommended.
+- `--lowtmpspace`: skip multipart ZIP tests when temporary disk space is insufficient.
 
+**Exit status:** `verify` returns `1` if it finds any problem, including missing files.
 
-Download background images:
+### `import`
 
-bash
-python gogrepo_delta.py download -backgrounds
+```bash
+python gogrepo_delta.py import "/old/GOG collection" "/new/GOG collection"
+```
 
-Limit the amount downloaded
+Files are imported only when their MD5 checksums match manifest entries.
 
-Limit downloads to approximately 1000 MB:
+Options include `--ids ID ...`, `--skipids ID ...`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
 
-bash
-python gogrepo_delta.py download -downloadlimit 1000
+### `backup`
 
-List games in your manifest
+```bash
+python gogrepo_delta.py backup "/path/to/source" "/path/to/backup"
+```
 
-Display all games:
+Creates an incremental backup by copying known files from the source collection to the destination.
 
-bash
+Options include `--ids ID ...`, `--skipids ID ...`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipextras`, `--skipgames`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
+
+### `list`
+
+```bash
 python gogrepo_delta.py list
-
-
-Search for games by words:
-
-bash
 python gogrepo_delta.py list witcher
+python gogrepo_delta.py list --format ids
+```
 
+Search terms are matched against game IDs, titles, and names; all supplied words must match, in any order. Put search words before options.
 
-Output only game titles/IDs, one per line:
+- `--format table`: readable table output (default).
+- `--format ids`: one game title/ID per line for use in scripts.
+- `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`: filter the listed games.
 
-bash
-python gogrepo_delta.py list -format ids
+### `export`
 
-Export your library
-
-Generate a CSV spreadsheet containing information about all files in your manifest:
-
-bash
+```bash
 python gogrepo_delta.py export
+python gogrepo_delta.py export --output my-library.csv
+python gogrepo_delta.py export --savedir "/path/to/GOG games"
+```
 
+Exports one CSV row per manifest file. The spreadsheet includes game ID/title, folder, file type, filename, OS, language, version, size, MD5, and update information. `--savedir DIR` adds an on-disk status column.
 
-The default output is gog-library.csv.
+- `--output FILE`: output path (default: `gog-library.csv`).
+- `--delimiter CHAR`: set the CSV separator. By default, the separator is selected for common spreadsheet locale conventions.
 
-You can specify another output filename:
+The CSV is UTF-8 with a byte-order mark (BOM) to improve compatibility with spreadsheet applications.
 
-bash
-python gogrepo_delta.py export -output my-library.csv
+### `clean`
 
+```bash
+python gogrepo_delta.py clean "/path/to/GOG games" --dryrun
+```
 
-You can also check which files exist in a particular game directory:
+Moves files not known to the manifest into the `!orphaned` directory. Use `--dryrun` to preview the operation.
 
-bash
-python gogrepo_delta.py export -savedir /path/to/games
+### `clear_partial_downloads`
 
+```bash
+python gogrepo_delta.py clear_partial_downloads "/path/to/GOG games" --dryrun
+```
 
-This adds an on disk column indicating whether each file exists, has the expected size, or is missing.
+Removes partial download files. Use `--dryrun` to preview the operation.
 
-Commands
+### `trash`
 
-All commands support -h or --help for command-specific help.
+```bash
+python gogrepo_delta.py trash "/path/to/GOG games" --dryrun
+```
 
-Long options accept both the original single-dash syntax (for example, -skipos) and GNU-style double-dash syntax (for example, --skipos).
-
-login
-
-Authenticate with GOG and save the authentication token locally.
-
-bash
-python gogrepo_delta.py login [username] [password]
-
-
-Arguments:
-
-username: GOG username or email address.
-password: GOG password (optional; prompted securely if omitted).
+By default, `trash` removes strict duplicates of known game files, matching file size and MD5 checksum.
 
 Options:
+- `--dryrun`: preview what would be removed.
+- `--installers`: also delete installer file types even when they are not duplicates.
+- `--folders`: also delete orphaned game folders when a corresponding game folder exists.
+- `--images`: also delete orphaned `!images` directories when a corresponding images directory exists.
+- `--relaxed`: relax duplicate checks and deletion requirements; use with care.
+- `--installersonly`: deprecated alias for `--installers`.
 
--browser: Use browser-based authentication instead of automatic username/password authentication.
+**Warning:** `trash` permanently deletes files. Always run it with `--dryrun` first and inspect the output.
 
-The saved token is stored in gog-token.dat.
+### `diagnostics`
 
-update
+```bash
+python gogrepo_delta.py diagnostics
+python gogrepo_delta.py diagnostics --verbose
+```
 
-Fetch game information and update the local manifest.
+Generates diagnostic information intended for maintenance and troubleshooting. `--verbose` includes additional information.
 
-bash
-python gogrepo_delta.py update [options]
+## Operating system and language selection
 
+For `update`, `download`, `verify`, `import`, and `backup`, the default selection is the current computer's operating system and detected language. If detection fails or the detected value is not offered by GOG, the script falls back to Windows and English.
 
-Options:
+- Use `--os windows linux mac` to explicitly select operating systems.
+- Use `--lang en de` to explicitly select languages.
+- Use `--skipos` and `--skiplang` to exclude values instead.
+- The include and exclude forms for the same dimension are mutually exclusive.
 
--os [OS ...]: Operating systems to include (windows, linux, mac). Default: detected system.
--skipos [OS ...]: Exclude specified operating systems.
--lang [LANG ...]: Languages to include (en, de, fr, etc.). Default: detected system language.
--skiplang [LANG ...]: Exclude specified languages.
--standard: Update new and updated games only (default unless -ids is used).
--skipknown: Only update games not already known to the manifest.
--updateonly: Only update games marked as updated by GOG.
--full: Update all games in your GOG account.
--ids [ID ...]: Update specific games by ID or title.
--skipids [ID ...]: Exclude specific games from updating.
--skiphidden: Skip games marked as hidden.
--installers [TYPE]: Installer selection (standalone or both). Deprecated.
--resumemode [MODE]: Resume handling: noresume, resume or onlyresume. Default: resume.
--strictverify: Clear previously verified status unless the MD5 matches.
--strictdupe: Apply stricter duplicate matching when MD5 information is missing.
--lenientdownloadsupdate: Do not mark installers for updating based solely on changed update timestamps when MD5 information is unavailable or does not match.
--strictextrasupdate: Mark extras for updating when their update timestamps change, even if names and sizes match.
--md5xmls: Download available MD5 XML files into the MD5 directory.
--nochangelogs: Do not save game changelogs.
--diagnostic: Perform more exhaustive checks of GOG data for subsequent diagnostics.
--wait HOURS: Wait the specified number of hours before starting.
+When the language is selected automatically and is not English, English is used as a fallback **per game, file group, and operating system** if the preferred language is unavailable. An explicit `--lang` or `--skiplang` selection disables this automatic fallback. For example, a German default can select German Windows installers and English Linux installers when no German Linux installer exists.
 
-Notes:
+**Manifest note:** an update replaces the stored file information for each game it fetches. If you need multiple OS/language variants, specify them explicitly (for example, `--os windows linux --lang en de`). A plain update can replace other variants previously stored for an updated game; files already on disk are not automatically deleted.
 
--os and -skipos are mutually exclusive.
--lang and -skiplang are mutually exclusive.
--standard, -skipknown, -updateonly and -full are mutually exclusive.
--ids and -skipids are mutually exclusive.
-download
+## Configuration
 
-Download games and extras listed in the manifest.
+On first run, the program creates `gogrepo_delta.cfg` in the current working directory. Set `GOGREPO_DELTA_CONFIG` to use a different configuration file.
 
-bash
-python gogrepo_delta.py download [savedir] [options]
+The INI-style file has these sections:
 
+- `[settings]`: internal settings such as HTTP timeouts/retries, download chunk size, thread count, logging limits, progress interval, and save thresholds.
+- `[common]`: command-line defaults shared by commands.
+- Command sections such as `[update]`, `[download]`, and `[verify]`: command-specific defaults.
 
-Arguments:
+Configuration precedence (highest first):
 
-savedir: Destination directory for downloaded games. Defaults to the current game storage directory.
+1. Options explicitly supplied on the command line.
+2. The relevant command section.
+3. `[common]`.
+4. Built-in defaults.
 
-Options:
-
--dryrun: Display what would be downloaded without downloading anything.
--skipextras: Skip bonus content.
--skipgames: Skip game installers (deprecated; use the individual installer options).
--skipgalaxy: Skip GOG Galaxy installers.
--skipstandalone: Skip standalone installers.
--skipshared: Skip installers shared between Galaxy and standalone.
--ids [ID ...]: Download only specified games.
--skipids [ID ...]: Exclude specified games.
--id ID: Specify a single game (deprecated; use -ids).
--os [OS ...]: Download game files only for specified operating systems.
--skipos [OS ...]: Exclude game files for specified operating systems.
--lang [LANG ...]: Download game files only for specified languages.
--skiplang [LANG ...]: Exclude specified languages.
--skipfiles [FILE ...]: Skip files matching the specified filenames or glob patterns.
--covers: Download game cover images.
--backgrounds: Download game background images.
--nocleanimages: Delete old artwork instead of cleaning it up.
--downloadlimit MB: Limit downloads to approximately the specified number of megabytes.
--skippreallocation: Do not preallocate disk space for downloads.
--wait HOURS: Wait the specified number of hours before starting.
-
-Notes:
-
-By default, the script selects the detected operating system and language.
-When using the automatically detected language, English is used as a fallback for games without a matching language version.
-Explicitly specifying -lang disables the automatic English fallback.
-verify
-
-Verify downloaded files against the manifest.
-
-bash
-python gogrepo_delta.py verify [gamedir] [options]
-
-
-Arguments:
-
-gamedir: Directory containing downloaded games. Defaults to the current game storage directory.
-
-Options:
-
--forceverify: Also verify files that have not changed since their last successful verification.
--skipmd5: Skip MD5 checksum verification.
--skipsize: Skip file size verification.
--skipzip: Skip ZIP integrity verification.
--highmemory: Use memory instead of temporary files when testing multipart ZIP archives. At least 50 GB of available memory is recommended.
--lowtmpspace: Skip multipart ZIP archive tests when insufficient temporary disk space is available.
--delete: Delete files that fail integrity checks.
--noclean: Leave files that fail integrity checks in place.
--clean: Deprecated; cleaning is now the default behavior.
--ids [ID ...]: Verify only specified games.
--skipids [ID ...]: Exclude specified games.
--id ID: Verify a single game (deprecated; use -ids).
--skipfiles [FILE ...]: Skip files matching specified filenames or glob patterns.
--os [OS ...]: Verify files for specified operating systems.
--skipos [OS ...]: Exclude specified operating systems.
--lang [LANG ...]: Verify files for specified languages.
--skiplang [LANG ...]: Exclude specified languages.
--skipextras: Skip bonus content.
--skipgames: Skip game installers.
--skipgalaxy: Skip Galaxy installers.
--skipstandalone: Skip standalone installers.
--skipshared: Skip shared installers.
-
-Important: The verify command returns exit status 1 when it finds verification problems, including missing files.
-
-import
-
-Import files from an existing GOG collection by matching their MD5 checksums against the manifest.
-
-bash
-python gogrepo_delta.py import src_dir dest_dir [options]
-
-
-Arguments:
-
-src_dir: Existing collection to import from.
-dest_dir: Destination directory for imported files.
-
-Options:
-
--os [OS ...]: Import files for specified operating systems.
--skipos [OS ...]: Exclude specified operating systems.
--lang [LANG ...]: Import files for specified languages.
--skiplang [LANG ...]: Exclude specified languages.
--skipgalaxy: Skip Galaxy installers.
--skipstandalone: Skip standalone installers.
--skipshared: Skip shared installers.
--ids [ID ...]: Import only specified games.
--skipids [ID ...]: Exclude specified games.
-
-Files are imported when their MD5 checksums match the corresponding manifest entries.
-
-backup
-
-Perform an incremental backup of your existing collection.
-
-bash
-python gogrepo_delta.py backup src_dir dest_dir [options]
-
-
-Arguments:
-
-src_dir: Source directory containing your GOG collection.
-dest_dir: Backup destination directory.
-
-Options:
-
--ids [ID ...]: Back up only specified games.
--skipids [ID ...]: Exclude specified games.
--os [OS ...]: Back up files for specified operating systems.
--skipos [OS ...]: Exclude specified operating systems.
--lang [LANG ...]: Back up files for specified languages.
--skiplang [LANG ...]: Exclude specified languages.
--skipextras: Skip bonus content.
--skipgames: Skip game installers.
--skipgalaxy: Skip Galaxy installers.
--skipstandalone: Skip standalone installers.
--skipshared: Skip shared installers.
-
-The backup is incremental and copies known files from the source collection to the destination.
-
-list
-
-List games in your manifest or search for games by ID, title or name.
-
-bash
-python gogrepo_delta.py list [words] [options]
-
-
-Arguments:
-
-words: Optional search terms. All supplied words must match, in any order.
-
-Options:
-
--os [OS ...]: Show games with files for specified operating systems.
--skipos [OS ...]: Exclude games that only have files for specified operating systems.
--lang [LANG ...]: Show games with files for specified languages.
--skiplang [LANG ...]: Exclude games that only have files for specified languages.
--format [FORMAT]: Output format: table (default) or ids.
+Boolean settings accept `true`/`yes`/`on`/`1` and `false`/`no`/`off`/`0`. Lists can be comma-separated or one item per line. Empty values use the built-in default. Unknown keys produce warnings; invalid values stop the command with an explanatory message. The program does not overwrite an existing configuration file.
 
 Example:
 
-bash
-python gogrepo_delta.py list witcher
-
-
-To generate a list suitable for scripts:
-
-bash
-python gogrepo_delta.py list -format ids
-
-export
-
-Export manifest information to a CSV spreadsheet.
-
-bash
-python gogrepo_delta.py export [options]
-
-
-Options:
-
--output FILE: Output filename. Default: gog-library.csv.
--savedir DIR: Check whether files exist in the specified directory and include an on disk column.
--delimiter CHAR: Specify the CSV column separator.
-
-The CSV contains one row per file, including:
-
-Game ID and title.
-Game folder.
-File type (standalone, Galaxy, shared or extra).
-Filename.
-Operating system and language.
-Version and file size.
-MD5 checksum.
-Last updated information.
-Optional on-disk status.
-
-The CSV is written as UTF-8 with a byte order mark for improved compatibility with spreadsheet applications such as Microsoft Excel.
-
-clean
-
-Clean your game directory of files that are not present in the manifest.
-
-bash
-python gogrepo_delta.py clean cleandir [options]
-
-
-Arguments:
-
-cleandir: Root directory containing your GOG games.
-
-Options:
-
--dryrun: Display files that would be moved without actually moving them.
-
-Files unknown to the manifest are moved into the !orphaned directory rather than immediately deleted.
-
-clear_partial_downloads
-
-Remove partially downloaded files from your game directory.
-
-bash
-python gogrepo_delta.py clear_partial_downloads gamedir [options]
-
-
-Arguments:
-
-gamedir: Root directory containing your GOG games.
-
-Options:
-
--dryrun: Display files that would be removed without actually removing them.
-trash
-
-Permanently remove orphaned files and optionally obsolete installers.
-
-bash
-python gogrepo_delta.py trash gamedir [options]
-
-
-Arguments:
-
-gamedir: Root directory containing your GOG games.
-
-Options:
-
--dryrun: Display files that would be removed without deleting them.
--installersonly: Deprecated alias for -installers.
--installers: Also delete installer file types, even if they are not duplicates.
--folders: Also delete orphaned game folders that have a corresponding game folder.
--images: Also delete orphaned !images directories that have a corresponding images directory.
--relaxed: Relax duplicate checks and deletion requirements. Use with care.
-
-By default, trash removes strict duplicates of known game files, matching both file size and MD5 checksum.
-
-Warning: This command permanently deletes files. Use -dryrun first to review what will be removed.
-
-diagnostics
-
-Generate diagnostic information for script maintenance and troubleshooting.
-
-bash
-python gogrepo_delta.py diagnostics [options]
-
-
-Options:
-
--verbose: Include additional diagnostic information that is not normally necessary.
-
-This command is particularly useful when investigating problems with GOG data retrieval or reporting issues.
-
-Configuration
-
-On its first run, the script automatically creates:
-
-text
-gogrepo_delta.cfg
-
-
-This INI-style configuration file allows you to customize program settings and command-line defaults without modifying the Python script.
-
-You can edit the file using any text editor.
-
-Configuration sections
-[settings]: Configure HTTP timeouts, retry counts, download threads, logging limits, download chunk sizes and other internal settings.
-[common]: Configure default command-line options shared between commands.
-[login], [update], [download], [verify], etc.: Configure defaults for individual commands.
-Configuration precedence
-
-Options are applied in the following order:
-
-Explicit command-line arguments.
-Command-specific configuration section.
-Common configuration section.
-Built-in defaults.
-
-Command-line arguments override configuration file values.
-
-Lists can be specified using commas or one entry per line.
-
-Boolean values accept true, yes, on, 1, false, no, off and 0.
-
-The configuration file is not overwritten if it already exists.
-
-To use a different configuration file, set the environment variable:
-
-text
-GOGREPO_DELTA_CONFIG
-
-
-For example, on Linux:
-
-bash
-export GOGREPO_DELTA_CONFIG=/path/to/my-config.cfg
-
-
-On Windows:
-
-cmd
+```ini
+[common]
+# Apply to commands that support these options
+os = windows
+lang = en
+
+[settings]
+download_threads = 4
+http_timeout = 30
+```
+
+Use a different configuration file:
+
+```bash
+# Linux / macOS
+export GOGREPO_DELTA_CONFIG="/path/to/my-config.cfg"
+
+# Windows Command Prompt
 set GOGREPO_DELTA_CONFIG=C:\path\to\my-config.cfg
+```
 
-Local Files
+Login credentials are never read from the configuration file.
 
-The script maintains several files in its working directory:
+## Files and data safety
 
-File	Description
-gogrepo_delta.cfg	Program configuration and command defaults.
-gog-token.dat	Saved GOG authentication token.
-gog-manifest.dat	Main game manifest.
-gog-manifest.dat.bak	Previous manifest backup.
-gog-manifest.dat.legacy	Original manifest format, preserved when migrating to JSON.
-gog-resume-manifest.dat	Manifest used for resuming interrupted updates.
-gog-config.dat	Internal configuration data.
-gogrepo.log	Log file.
-gog-library.csv	Default CSV export filename.
+The program keeps its state files in the current working directory (unless configured otherwise):
 
-The manifest is saved in JSON format by default. Existing legacy-format manifests can still be read.
+| File | Purpose |
+| --- | --- |
+| `gogrepo_delta.cfg` | Configuration and command defaults. |
+| `gog-token.dat` | Saved GOG authentication token. Treat it as a credential. |
+| `gog-manifest.dat` | Main library manifest (JSON by default). |
+| `gog-manifest.dat.bak` | Previous manifest version. |
+| `gog-manifest.dat.legacy` | One-time preservation of the old manifest format during migration. |
+| `gog-resume-manifest.dat` | State used to resume interrupted updates. |
+| `gog-config.dat` | Internal GOG configuration data. |
+| `gogrepo.log` | Log file. |
+| `gog-library.csv` | Default CSV export output. |
 
-To retain the old manifest format, use:
+### Manifest format and recovery
 
-bash
-python gogrepo_delta.py update -manifestformat legacy
+The manifest and resume manifest are written as indented JSON by default. Existing legacy-format manifests remain readable. To write the old format:
 
+```bash
+python gogrepo_delta.py update --manifestformat legacy
+```
 
-A missing or damaged manifest is handled with additional safeguards. When a backup is available, the script offers to restore it rather than silently starting with an empty manifest.
+JSON saves are checked by reading the data back. If it cannot be represented without changing its meaning, the old format is used for that save. Saves are atomic; the previous manifest is retained as `.bak`.
 
-Requirements
-Python 3.10 or later.
-html5lib 0.99999 or later.
-requests.
-psutil.
+If the manifest is missing or damaged and a backup exists, the program offers an interactive restore. A damaged manifest is preserved with a `.damaged` suffix. In non-interactive runs, it stops rather than asking an unanswered question or silently treating a damaged manifest as an empty library. A first run with neither manifest nor backup is normal.
 
-Install the required Python packages using pip:
+**Back up `gog-token.dat` securely** if you want to preserve the login session, and do not share it in bug reports.
 
-bash
-pip install html5lib requests psutil
+## Logging and exit codes
 
-Optional dependencies
-html2text 2015.6.21 or later: Used to convert GOG game changelogs from HTML into readable text.
+Logs are written to `gogrepo.log`, with timestamps and severity levels. Common options:
 
-Install it with:
+- `--nolog`: disable file logging.
+- `--debug`: enable additional debug output.
+- Log rotation is configurable in `gogrepo_delta.cfg`.
 
-bash
-pip install html2text
+At the end of a command, the program reports a summary of completed work and lists failures with reasons. Exit status:
 
-Platform-specific dependencies
+- `0`: command completed without reported failures.
+- `1`: one or more failures occurred, a fatal error occurred, or the run was interrupted.
 
-Linux / Unix:
+A command can therefore complete most of its work and still return `1`. This is intentional and useful for scripts and scheduled jobs.
 
-PyQt5 with QtDBus support is optional and can be used to prevent system suspend/sleep interruptions where supported.
+## Troubleshooting
 
-macOS:
+- Run `python gogrepo_delta.py --help` or `python gogrepo_delta.py COMMAND --help` for the exact options accepted by your copy.
+- Run `diagnostics`; add `--verbose` for additional details.
+- Check `gogrepo.log` for timestamped error messages.
+- If a manifest cannot be read, preserve the `.bak` and `.damaged` files before attempting manual recovery.
+- If login encounters a CAPTCHA or GOG changes its login page, try `login --browser`.
+- For scheduled tasks, remember that recovery prompts require an interactive terminal; unattended runs stop safely instead of waiting for input.
 
-PyObjC components (pyobjc, including CoreFoundation support) are required for macOS-specific functionality.
-The script uses macOS power-management functionality to prevent sleep interruptions where supported.
+## Credits and links
 
-Windows:
+- Original project: [gogrepoc](https://github.com/kalanyr/gogrepoc)
+- GOG: [https://www.gog.com/](https://www.gog.com/)
 
-Uses the Windows API through Python's built-in ctypes module where required.
-Logging and Error Handling
+See [CHANGELOG.md](CHANGELOG.md) for the changes documented for this version.
 
-The script writes its log to:
+## Changelog
 
-text
-gogrepo.log
-
-
-Logging includes timestamps and severity levels.
-
-Logging can be disabled using:
-
-bash
-python gogrepo_delta.py download -nolog
+The release history and notable maintenance changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 
-The script also supports:
+---
 
-Automatic log rotation.
-Configurable retry counts and delays.
-HTTP timeout handling.
-Resumable downloads.
-Atomic manifest and configuration file saves.
-Detailed end-of-run summaries.
-Failure reporting with reasons.
-Meaningful process exit codes.
+<div align="center">
 
-A successful run returns exit status 0. A run that encounters failures returns exit status 1, even if other operations completed successfully.
+**Preserve your library. Verify your files. Keep control of your collection.**
 
-This makes the script suitable for automated jobs and monitoring.
-
-Other Arguments
-
-These arguments are available across the commands where applicable:
-
--h, --help: Display help and exit.
--v, --version: Display script version and exit.
--nolog: Disable writing to gogrepo.log.
--debug: Enable additional debug logging.
-
-Example:
-
-bash
-python gogrepo_delta.py --version
-
-TODO
-Additional improvements to GOG movie support.
-Further improvements to GOG API compatibility.
-Additional features and maintenance improvements.
-
-Feel free to open an issue or submit a feature request on GitHub!
-
-Links
-gogrepo_delta GitHub repository
-gogrepo_delta.py source code
-Original gogrepoc project
-GOG.com
+</div>
