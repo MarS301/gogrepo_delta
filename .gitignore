@@ -1,5 +1,4 @@
 .idea
-*.yml
 *.pyc
 *.bat
 *.dat
