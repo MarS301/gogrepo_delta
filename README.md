@@ -385,8 +385,8 @@ Generates diagnostic information intended for maintenance and troubleshooting. `
 
 For `update`, `download`, `verify`, `import`, and `backup`, the default selection is the current computer's operating system and detected language. If detection fails or the detected value is not offered by GOG, the script falls back to Windows and English.
 
-- Use `--os windows linux mac` to explicitly select operating systems.
-- Use `--lang en de` to explicitly select languages.
+- Use `--os` to explicitly select operating systems.
+- Use `--lang` to explicitly select languages.
 - Use `--skipos` and `--skiplang` to exclude values instead.
 - The include and exclude forms for the same dimension are mutually exclusive.
 
