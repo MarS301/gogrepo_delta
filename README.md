@@ -11,6 +11,7 @@ backing up, and organizing GOG installers and bonus content.
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](https://www.gnu.org/licenses/gpl-3.0.html)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
+[![Python CI](https://github.com/MarS301/gogrepo_delta/actions/workflows/tests.yml/badge.svg)](https://github.com/MarS301/gogrepo_delta/actions/workflows/tests.yml)
 
 </div>
 
@@ -31,7 +32,6 @@ library and helps you maintain a dependable, verifiable local collection.
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
 | **Upstream project** | [kalanyr/gogrepoc](https://github.com/kalanyr/gogrepoc) |
-[![Python CI](https://github.com/MarS301/gogrepo_delta/actions/workflows/tests.yml/badge.svg)](https://github.com/MarS301/gogrepo_delta/actions/workflows/tests.yml)
 
 ## Table of contents
 
@@ -44,6 +44,7 @@ library and helps you maintain a dependable, verifiable local collection.
   - [2. Update the manifest](#2-update-the-manifest)
   - [3. Download games and extras](#3-download-games-and-extras)
   - [4. Verify your collection](#4-verify-your-collection)
+  - [5. Keep the collection up to date](#5-keep-the-collection-up-to-date)
 - [Commands](#commands)
   - [login](#login)
   - [update](#update)
