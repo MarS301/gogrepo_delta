@@ -7,9 +7,9 @@ if False:
     print("Please start this script with a python interpreter: python /path/to/gogrepo_delta.py")
 #END#
 __appname__ = 'gogrepo_delta.py'
-__author__ = 'eddie3,kalaynr'
+__author__ = 'eddie3,kalaynr,MarS301,duck.ai'
 __version__ = '0.15.19'
-__url__ = 'https://github.com/kalanyr/gogrepoc'
+__url__ = 'https://github.com/MarS301/gogrepo_delta'
 
 # =============================================================================================
 # REFACTORING NOTES
