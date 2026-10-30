@@ -30,7 +30,7 @@ library and helps you maintain a dependable, verifiable local collection.
 | **Python requirement** | Python 3.10 or newer |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
-| **Upstream project** | [MarS301/gogrepo_delta](https://github.com/MarS301/gogrepo_delta/) |
+| **Upstream project** | [kalanyr/gogrepoc](https://github.com/kalanyr/gogrepoc) |
 
 ## Table of contents
 
