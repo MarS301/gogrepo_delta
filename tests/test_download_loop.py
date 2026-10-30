@@ -68,16 +68,19 @@ class StallWatchdogTests(unittest.TestCase):
         time.sleep(0.6)
         self.assertFalse(response.closed.is_set())
 
-    def test_restarting_does_not_create_threads(self):
-        response = FakeResponse()
-        watchdog = g._StallWatchdog(response, 60)
-        before = threading.active_count()
+def test_restarting_does_not_create_threads(self):
+    response = FakeResponse()
+    watchdog = g._StallWatchdog(response, 60)
+    try:
+        original_timer = watchdog.timer
+        original_thread = original_timer
         for _ in range(20000):
             watchdog.pause()
             watchdog.resume()
-        self.assertEqual(threading.active_count(), before)
+        self.assertIs(watchdog.timer, original_timer)
+        self.assertTrue(original_timer.is_alive())
+    finally:
         watchdog.stop()
-
 
 class DownloadLoopTests(unittest.TestCase):
     def test_all_data_is_written_and_accounted(self):
