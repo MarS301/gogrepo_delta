@@ -2,7 +2,7 @@
 
 All notable changes documented in `gogrepo_delta.py` are listed here. This changelog summarizes the implementation notes included with version **0.15.19**; it does not claim changes beyond those recorded in the source.
 
-## [0.15.19] - Date not specified
+## [0.15.19] - 30.10.2026
 
 ### Added
 
