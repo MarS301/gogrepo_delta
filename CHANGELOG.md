@@ -1,6 +1,29 @@
 # Changelog
 
-All notable changes documented in `gogrepo_delta.py` are listed here. This changelog summarizes the implementation notes included with version **0.15.19**; it does not claim changes beyond those recorded in the source.
+All notable changes documented in `gogrepo_delta.py` are listed here. This changelog summarizes the implementation notes included with version **0.15.29**; it does not claim changes beyond those recorded in the source.
+
+## [0.15.29] - 31.10.2026
+
+### Added
+
+- Updated the author credits to include eddie3 and kalaynr (the original projects), as well as MarS301 and claude.ai.
+
+### Changed
+
+- Chunk-verification downloads now wait for the configured retry delay between attempts, as the existing retry message indicated.
+- A run that only needs to recover completed provisional files now handles those files without requiring another download to trigger the recovery process.
+- The generated configuration file now explains that lists must be separated by commas, not spaces or semicolons. It also clarifies that section names and os and lang values must be lowercase, while option names may use any case.
+- Updated the project URL shown by --help and the URL used by update_self() to point to the new repository: https://github.com/MarS301/gogrepo_delta.
+
+### Fixed
+
+-  Fixed a NameError when processing older manifests without api_downlink entries if the download URL contained signed parameters (wsSecret, wsTime, prefix).
+-  The chunk-verification download loop now respects the configured http_retry_delay before retrying an incomplete chunk.
+-  Completed files left behind by an interrupted run are now moved to their proper locations even when no additional downloads are needed.
+
+### Compatibility and behaviour notes
+
+- none
 
 ## [0.15.19] - 30.10.2026
 
