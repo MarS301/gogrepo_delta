@@ -187,6 +187,7 @@ class ExistingFileTests(Checks):
         r = result('all_up_to_date')
         self.assertLogged(r, 'nothing to download')
         self.assertEqual(r['hits'].get(('GET', 'alpha__setup_alpha.exe')), None)
+        self.assertNotLogged(r, 'moving')                       # nothing was left in !provisional either
 
 
 class ResumeTests(Checks):
@@ -206,6 +207,32 @@ class ResumeTests(Checks):
         self.assertServed(r, 'alpha/manual.pdf')
         self.assertServed(r, 'Beta Game/extra_beta.exe')
         self.assertEqual([k for k in files(r) if k.startswith('!downloading')], [])
+
+    def test_a_file_left_in_provisional_is_moved_even_when_nothing_else_needs_downloading(self):
+        # everything is in place except alpha/manual.pdf, which an interrupted run had finished in !provisional
+        r = result('provisional_only')
+        self.assertServed(r, 'alpha/manual.pdf')
+        self.assertEqual([k for k in files(r) if k.startswith('!downloading') and not k.endswith('/')], [])
+        self.assertNotIn('!downloading/!provisional/alpha/', r['tree'])          # the empty game folder is removed too
+        self.assertLogged(r, "moving provisionally completed download")
+
+    def test_that_run_says_what_it_did_and_not_that_there_was_nothing_to_do(self):
+        r = result('provisional_only')
+        self.assertLogged(r, 'moving 1 completed file(s) that an earlier run left')
+        self.assertNotLogged(r, 'nothing to download')
+
+    def test_the_summary_counts_the_recovered_file(self):
+        r = result('provisional_only')
+        self.assertEqual(r['report']['counts'].get('files recovered from an earlier run', [0])[0], 1)
+
+    def test_recovering_a_file_from_provisional_also_resets_the_marks_in_the_manifest(self):
+        r = result('provisional_only_flags')
+        self.assertServed(r, 'alpha/manual.pdf')
+        entry = r['manifest_obj'][0]['extras'][0]
+        self.assertEqual(entry['name'], 'manual.pdf')
+        self.assertFalse(entry['force_change'])
+        self.assertFalse(entry['prev_verified'])
+        self.assertEqual(entry['old_updated'], entry['updated'])
 
     def test_provisional_and_final_file_both_present_is_reported(self):
         r = result('provisional_and_dest')

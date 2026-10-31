@@ -72,17 +72,31 @@ class ConfigTestCase(unittest.TestCase):
 
 # --- identity ------------------------------------------------------------------------------------------------------
 
+def notes_entry_numbers():
+    """The numbers of the entries in the refactoring notes at the top of the script ('# 24. New command: ...')."""
+    import re
+    with open(SCRIPT, encoding='utf-8') as reader:
+        text = reader.read()
+    notes = text.split('# Known issues noticed while refactoring')[0]
+    return [int(n) for n in re.findall(r'^# (\d+)\. ', notes, flags=re.M)]
+
+
 class IdentityTests(unittest.TestCase):
     def test_name_and_version(self):
-        self.assertEqual(g.__version__, '0.15.19')
         self.assertEqual(g.__appname__, 'gogrepo_delta.py')
-        self.assertEqual(g.USER_AGENT, 'GOGRepoDelta/0.15.19')
+        self.assertEqual(g.USER_AGENT, 'GOGRepoDelta/' + g.__version__)
+
+    def test_the_patch_number_of_the_version_is_the_number_of_the_newest_notes_entry(self):
+        # the rule: every new entry in the refactoring notes raises the version, so that 0.5.N matches entry N
+        numbers = notes_entry_numbers()
+        self.assertEqual(numbers, list(range(1, len(numbers) + 1)), 'the entries must be numbered 1, 2, 3, ... without gaps')
+        self.assertEqual(g.__version__, '0.5.%d' % numbers[-1])
 
     def test_version_option_shows_them(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
             g.process_argv(['gogrepo_delta.py', '--version'])
-        self.assertIn('gogrepo_delta.py (version 0.15.19)', out.getvalue())
+        self.assertIn('gogrepo_delta.py (version %s)' % g.__version__, out.getvalue())
 
     def test_data_files_and_log_keep_their_names(self):
         self.assertEqual((g.MANIFEST_FILENAME, g.TOKEN_FILENAME, g.RESUME_MANIFEST_FILENAME, g.CONFIG_FILENAME),
@@ -834,6 +848,73 @@ class OptionKindTests(unittest.TestCase):
             self.assertEqual(lines[0], '; x: text for b')
             lines = g._section_lines('common', [action], set(), {'x': 'a'})
             self.assertEqual(lines[0], '; x: text for a')
+
+
+class WrittenRulesTests(ConfigTestCase):
+    """The remarks at the top of the generated file are true: these tests check the behaviour they describe."""
+
+    def text(self):
+        return g.default_config_text(g.build_parser()[1])
+
+    def test_the_header_gives_the_rules(self):
+        header = self.text().split('[settings]')[0]
+        flat = ' '.join(line.lstrip('; ') for line in header.splitlines())
+        for part in ('separate the entries with commas (not with spaces or semicolons)', 'or write one per line',
+                     'section names ([common], [update], ...)', 'values of os and lang (windows, linux, mac; en, de, ...) in lower case',
+                     'option names may be written in any case'):
+            self.assertIn(part, flat)
+
+    def test_lists_are_separated_by_commas_and_by_nothing_else(self):
+        self.write('[common]\nos = windows, linux\n')
+        self.assertEqual(self.parse('download').os, ['windows', 'linux'])
+        for separator in (' ', '; ', ' / '):
+            self.write('[common]\nos = windows%slinux\n' % separator)
+            self.assertIn('windows%slinux' % separator, self.fails('download'))
+        self.write('[common]\nos =\n    windows\n    linux\n')
+        self.assertEqual(self.parse('download').os, ['windows', 'linux'])             # one per line works too
+
+    def test_the_values_of_os_and_lang_must_be_lower_case(self):
+        for text in ('[common]\nos = Windows\n', '[common]\nos = windows, Linux\n', '[common]\nlang = DE\n', '[common]\nlang = De, en\n'):
+            self.write(text)
+            self.fails('download')
+        self.write('[common]\nos = windows\nlang = de, en\n')
+        args = self.parse('download')
+        self.assertEqual((args.os, args.lang), (['windows'], ['de', 'en']))
+
+    def test_section_names_must_be_lower_case(self):
+        self.write('[COMMON]\nos = linux\n')
+        args, log = self.parse_logged('download')
+        self.assertEqual(args.os, [])                                                    # not used ...
+        self.assertIn('[COMMON] is not a command, ignored', log)                         # ... and the log says so
+        self.write('[Download]\ndryrun = true\n')
+        args, log = self.parse_logged('download')
+        self.assertFalse(args.dryrun)
+        self.assertIn('[Download] is not a command, ignored', log)
+
+    def test_option_names_may_be_written_in_any_case(self):
+        self.write('[common]\nOS = linux\nDryRun = TRUE\nWAIT = 2\n')
+        args = self.parse('download')
+        self.assertEqual((args.os, args.dryrun, args.wait), (['linux'], True, 2.0))
+
+    def test_ids_may_be_written_in_any_case_because_names_are_compared_ignoring_case(self):
+        self.write('[common]\nids = Beneath A Steel Sky\n')
+        self.assertEqual(self.parse('download').ids, ['Beneath A Steel Sky'])           # kept as written; matching ignores the case
+
+
+class ProjectAddressTests(unittest.TestCase):
+    def test_the_project_address_is_the_new_repository(self):
+        self.assertEqual(g.__url__.split()[0], 'https://github.com/MarS301/gogrepo_delta')
+        self.assertEqual(g.REPO_HOME_URL.strip(), 'https://api.github.com/repos/MarS301/gogrepo_delta')
+
+    def test_the_two_addresses_name_the_same_repository(self):
+        self.assertEqual(g.REPO_HOME_URL.strip().split('/repos/')[1], g.__url__.split('github.com/')[1])
+
+    def test_the_help_shows_the_new_address_and_the_credit_stays(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            g.process_argv(['gogrepo_delta.py', '--help'])
+        self.assertIn('https://github.com/MarS301/gogrepo_delta', out.getvalue())
+        self.assertEqual(g.__author__.split(','), ['eddie3', 'kalaynr', 'MarS301', 'claude.ai'])    # the original authors, then this version's
 
 
 class EnsureConfigFileTests(ConfigTestCase):

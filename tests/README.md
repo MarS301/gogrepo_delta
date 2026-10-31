@@ -23,6 +23,8 @@ No network or GOG account is needed, and the results do not depend on the operat
 | test_login | captcha detection (old and new form), the `login -browser` switch, pasted-address handling, the automatic password flow, login exit status (GOG faked, no network) |
 | test_config | config file `gogrepo_delta.cfg`: `[settings]` (parsing, limits, reaching the constants), flag defaults (precedence, lists, switches, exclusive flags, folders, `[common]`), the generated file and its compact layout, creating it on the first run; also name and version |
 | test_ids | name matching and `-ids` / `-skipids` (exact, normalised, ambiguous, typos, unquoted words), suggestions, `list` command (search, table, filters, output streams), and how download, verify, import and backup use them |
+| test_chunk_tree | `fetch_chunk_tree`: every branch of getting a file's checksum data, including the signed-address case that used to raise NameError |
+| test_chunk_retry | the retry loop of chunk verification: waits `http_retry_delay` between tries, none after the last, not holding the lock |
 | test_interactive | deciding whether a person can answer a question (terminal, no terminal, Windows console vs the NUL device) |
 | test_atomic_save | atomic manifest/token/config saving, crash simulation |
 | test_summarised_warnings | combined MD5 warnings, quiet 404 handling (real local HTTP server) |

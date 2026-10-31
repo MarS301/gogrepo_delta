@@ -220,6 +220,13 @@ def sc_provisional_only(srv, root):
         put(r, '!downloading/!provisional/alpha/manual.pdf', srv.files['alpha__manual.pdf'])
     return dict(items=w.items, kwargs={}, setup=setup)
 @scenario
+def sc_provisional_only_flags(srv, root):
+    """Like provisional_only, and the finished file belongs to an entry that is marked 'needs update' and 'verified'."""
+    d = SCENARIOS['provisional_only'](srv, root)
+    entry = d['items'][0]['extras'][0]
+    entry['force_change'] = True; entry['prev_verified'] = True
+    return d
+@scenario
 def sc_provisional_and_dest(srv, root):
     w = standard_world(srv)
     def setup(r):
