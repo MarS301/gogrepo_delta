@@ -26,8 +26,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Program version** | `0.15.19` |
-| **Latest release tag** | `v0.5.29` |
+| **current version** | `v0.5.29` |
 | **Python requirement** | Python 3.10 or newer |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
