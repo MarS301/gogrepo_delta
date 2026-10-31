@@ -8,8 +8,8 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalaynr,MarS301,claude.ai'
-__version__ = '0.15.19'
-__url__ = 'https://github.com/MarS301/gogrepo_delta'
+__version__ = '0.5.29'   # 0.5.N: N is the number of the newest entry in the refactoring notes below (raise it with every new entry)
+__url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
 # REFACTORING NOTES
@@ -349,15 +349,61 @@ __url__ = 'https://github.com/MarS301/gogrepo_delta'
 #      ids_not_found and the known nondeterministic order of file names in one warning: 2 of 10 runs differ for the old version
 #      compared with itself, and for the new one), and runs on a real 76-game manifest. Not checked: the real GOG service.
 #
+# 25. Bug fix: fetch_chunk_tree raised NameError for an old manifest and a signed download address (version 0.5.25)
+#    - Known since the refactoring (it was listed under the known issues). When a game has no api_downlink in the manifest (a manifest
+#      made before it was stored) and its download address carries the signed parts (wsSecret, wsTime, prefix), the warning used the
+#      name `d`, which does not exist in that function. NameError is not caught there or in the download worker (only IOError is), so
+#      the downloader thread ended with an exception and its file was left unfinished. The warning now names the file as the other
+#      warnings of the function do, and the function returns None, so the file is downloaded without chunk verification, as was
+#      intended. (The same wording in fetch_file_info is fine: `d` is its parameter.)
+#    - fetch_chunk_tree had no tests. tests/test_chunk_tree.py now covers every branch: file types without checksums, the api_downlink
+#      way, the old way with and without a signature, and every error that is caught (404, other HTTP errors, bad XML, connection
+#      and decoding errors).
+#
+# 26. Bug fix: the chunk-verification retry loop did not wait before trying again (version 0.5.26)
+#    - Known since the refactoring. When a chunk of a file that is verified against GOG's MD5 data arrives incomplete,
+#      _download_with_chunk_verification logged "will retry in Ns..." and then tried again at once, so all the retries were used up within
+#      moments, on a connection that had just failed. The plain download loop has always waited. It now waits HTTP_RETRY_DELAY
+#      (config setting http_retry_delay) before each retry, and not after the last try. It waits outside job.lock, so the other
+#      downloads are not held up (the plain loop does hold the lock while it waits; see the known issues).
+#    - tests/test_chunk_retry.py: a chunk that arrives at once needs no wait; one that fails once is retried after the delay; the number
+#      of retries and the waits between them follow the settings; no wait after the last try, after an HTTP error or after an unexpected
+#      Content-Range; the lock is free while waiting; the plain loop waits the same time.
+#    DIFFERENCE: a download with chunk verification that hits incomplete chunks now takes up to http_retry_count x http_retry_delay
+#      seconds longer before it gives up (4 x 5 s with the default settings); that is what the message always promised.
+#
+# 27. Config file: a remark about commas and lower case; the project address is the new repository (version 0.5.27)
+#    - The header of the generated file now says that lists are separated with commas (not with spaces or semicolons), and that the
+#      section names and the values of os and lang are written in lower case while option names may be in any case. That is how the
+#      program behaves (checked, and kept true by tests): "os = windows linux" and "os = windows; linux" are refused, "os = Windows" and
+#      "lang = DE" are refused, "[COMMON]" is ignored with a warning, "OS = linux" and "DryRun = true" work, and ids of games may be
+#      in any case (names are compared ignoring case). Only new files get the remark; a file made earlier is never changed.
+#    - __url__ (shown in --help) and REPO_HOME_URL (used by update_self, which is not connected to any command) now point to
+#      https://github.com/MarS301/gogrepo_delta. __author__ and the history above keep the credit to the original projects.
+#
+# 28. Bug fix: download left finished files in !provisional when nothing else needed downloading (version 0.5.28)
+#    - Known since the refactoring. An interrupted run can leave completely downloaded files in !downloading/!provisional (they are moved to
+#      their folders at the end of a run). The next run found them, but if no other file needed downloading it stopped at "nothing to
+#      download" before moving them, so they stayed there until some later run happened to download something else. Now it says
+#      "nothing else needs downloading; moving N completed file(s) ... to their place", moves them (which also resets the
+#      "needs update" flags and saves the manifest, as in a normal run), removes the empty folders, and the summary at the end counts
+#      them under "files recovered from an earlier run". With nothing left in !provisional the run still says "nothing to download".
+#    - tests/test_download.py: the rig scenario provisional_only (everything in place except one finished file in !provisional) now has
+#      tests for the file being moved, for the message, and for the summary count.
+#
+# 29. Credits; test_download_loop.py replaced by the repository owner's version (version 0.5.29)
+#    - __author__ now lists the authors of this version too: eddie3, kalaynr (the original projects), MarS301 and claude.ai.
+#    - tests/test_download_loop.py is the version written by the repository owner and is used as it is from now on. The only change
+#      against the earlier file is test_restarting_does_not_create_threads: it no longer counts all the threads of the process
+#      (other threads starting or ending at that moment could disturb the count, which showed on Windows) but checks that the stall
+#      watchdog still has the same timer thread, and that it is alive, after 20000 pause()/resume() calls. It still fails when a
+#      timer thread is started for every chunk again.
+#
 # Known issues noticed while refactoring and deliberately NOT changed:
-#    - fetch_chunk_tree: in the "signed prefix" branch the message uses an undefined name `d`
-#      (d.name) and would raise NameError.
 #    - Saving still re-formats the whole manifest with pprint on every save (the cost is proportional to
 #      the library size); a faster serialiser would change the manifest file layout.
-#    - The chunk-verification retry loop logs "will retry in Ns" but does not sleep (the plain
-#      download loop does).
-#    - cmd_download returns with "nothing to download" before moving files left in !provisional by
-#      an interrupted run when no other file needs downloading.
+#    - The plain download loop (_download_without_chunk_verification) sleeps for HTTP_RETRY_DELAY while it holds job.lock, which
+#      stops the other download threads' locked work (progress lines, bookkeeping) for that time. Left as it was.
 #    - Unreachable code kept as is: the AttributeError defaults for folder_name/galaxyDownloads/
 #      sharedDownloads in cmd_download (handle_game_renames sets them first), the SSLError branch in
 #      _download_ioloop (SSLError is a ConnectionError and is caught by the branch before it) and
@@ -723,7 +769,7 @@ INFO_FILENAME = r'!info.txt'
 
 
 #github API URLs
-REPO_HOME_URL = "https://api.github.com/repos/kalanyr/gogrepoc" 
+REPO_HOME_URL = "https://api.github.com/repos/MarS301/gogrepo_delta"   # for update_self (not connected to any command, see the known issues)
 NEW_RELEASE_URL = "/releases/latest"
 
 # GOG URLs
@@ -2158,7 +2204,8 @@ def fetch_chunk_tree(response, session, api_downlink=None):
                 if not uses_signed_prefix:
                     chunk_url = append_xml_extension_to_url_path(response.url)
                 else:
-                    warn("signed prefix required to fetch checksum data for {} but secret could not be retrieved".format(d.name))
+                    warn("signed prefix required to fetch checksum data for {} but secret could not be retrieved".format(
+                        unquote(urlparse(response.url).path.split('/')[-1])))
                     return None
             chunk_response = request(session,chunk_url,quiet_statuses=(404,))
             shelf_etree = xml.etree.ElementTree.fromstring(chunk_response.content)
@@ -3541,7 +3588,10 @@ def default_config_text(commands):
         'Order of precedence: typed on the command line, then the [command] section, then [common], then the built-in default. '
         'An empty value means "not set". An entry for os, lang or ids counts as typed. Passwords are never read from here.',
         'Yes/no options: true/false (true = as if typed; a typed option cannot switch it off, so set it to false here). '
-        'Lists: separate with commas, or one per line indented. Folders: give all folders of a command here, or none.',
+        'Lists (os, lang, ids, ...): separate the entries with commas (not with spaces or semicolons), or write one per line, '
+        'indented. Folders: give all folders of a command here, or none.',
+        'Lower case: write the section names ([common], [update], ...) and the values of os and lang (windows, linux, mac; en, de, '
+        '...) in lower case; option names may be written in any case.',
         'Comments go on their own line, never after a value.')]
     lines += ['', '[settings]']
     for keys, text in SETTING_GROUPS:
@@ -5293,6 +5343,7 @@ def _download_with_chunk_verification(job, tid, href, path, downloading_path, sz
                                                 job.sizes[path] += dlsz
                                             if (retries > 0):
                                                 warn("failed to download %s, byte_range=%s (%d retries left) -- will retry in %ds..." % (os.path.basename(path), str(se),retries,HTTP_RETRY_DELAY))
+                                                time.sleep(HTTP_RETRY_DELAY)     # as the plain download loop does (this one does not hold job.lock meanwhile)
                                             else:
                                                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
                                                 succeed = succeed and False;
@@ -5535,7 +5586,15 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
         return  # bail, as below just kicks off the actual downloading
         
     if job.work.empty():
-        info("nothing to download")
+        if job.work_provisional.empty():
+            info("nothing to download")
+            return
+        # Nothing is left to download, but an interrupted earlier run had finished some files that are still in !provisional.
+        info("nothing else needs downloading; moving %d completed file(s) that an earlier run left in '%s' to their place"
+             % (job.work_provisional.qsize(), os.path.join(DOWNLOADING_DIR_NAME, PROVISIONAL_DIR_NAME)))
+        _finish_provisional_downloads(job)
+        _remove_empty_subdirs(downloadingdir, skip_dir=PROVISIONAL_DIR_NAME)
+        _remove_empty_subdirs(provisionaldir)
         return
     
     downloading_root_dir = os.path.join(savedir, DOWNLOADING_DIR_NAME)
