@@ -237,8 +237,8 @@ __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by ka
 #      was tested with GOG's answers faked. Whether GOG shows Google / Discord sign-in on this page, and so whether -browser works
 #      for such accounts, is not known.
 #
-# 20. Renamed to gogrepo_delta, version 0.15.19, and a config file (gogrepo_delta.cfg)
-#    - Script file and program name are now gogrepo_delta.py (__appname__, the --version text, the User-Agent GOGRepoDelta/0.15.19).
+# 20. Renamed to gogrepo_delta, version 0.5.19, and a config file (gogrepo_delta.cfg)
+#    - Script file and program name are now gogrepo_delta.py (__appname__, the --version text, the User-Agent GOGRepoDelta/0.5.19).
 #      Nothing else was renamed: gogrepo.log, gog-manifest.dat, gog-token.dat, gog-resume-manifest.dat, gog-config.dat and the
 #      logger name keep their names, so an existing library and log keep working.
 #    - Config file: INI format, gogrepo_delta.cfg in the folder the program is started from (like the manifest). Set the
