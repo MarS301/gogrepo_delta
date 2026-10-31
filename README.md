@@ -7,11 +7,10 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.15.19-blue)](https://github.com/kalanyr/gogrepoc)
+[![Version](https://img.shields.io/badge/version-0.5.29-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](https://www.gnu.org/licenses/gpl-3.0.html)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
-[![Python CI](https://github.com/MarS301/gogrepo_delta/actions/workflows/tests.yml/badge.svg)](https://github.com/MarS301/gogrepo_delta/actions/workflows/tests.yml)
 
 </div>
 
@@ -27,7 +26,8 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `0.15.19` |
+| **Program version** | `0.15.19` |
+| **Latest release tag** | `v0.5.29` |
 | **Python requirement** | Python 3.10 or newer |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -44,7 +44,6 @@ library and helps you maintain a dependable, verifiable local collection.
   - [2. Update the manifest](#2-update-the-manifest)
   - [3. Download games and extras](#3-download-games-and-extras)
   - [4. Verify your collection](#4-verify-your-collection)
-  - [5. Keep the collection up to date](#5-keep-the-collection-up-to-date)
 - [Commands](#commands)
   - [login](#login)
   - [update](#update)
@@ -74,6 +73,8 @@ library and helps you maintain a dependable, verifiable local collection.
 - Detect the computer's operating system and language automatically.
 - Use English as a fallback when the detected language is unavailable (unless language selection is explicitly supplied).
 - Resume interrupted downloads using verified chunks where checksum data is available.
+- Retry incomplete chunk downloads using the configured retry count and delay.
+- Recover fully downloaded provisional files left behind by an interrupted run, even when no new downloads are needed.
 - Verify file sizes, MD5 checksums, and ZIP archive integrity.
 - Import existing collections by matching MD5 checksums.
 - Create incremental backups.
@@ -181,7 +182,7 @@ python gogrepo_delta.py download
 python gogrepo_delta.py verify
 ```
 
-Updates and downloads are incremental. Interrupted downloads can be resumed where sufficient verified data is available.
+Updates and downloads are incremental. Interrupted downloads can be resumed where sufficient verified data is available. If a run is interrupted after a file has finished downloading but before it is moved out of `!downloading/!provisional`, the next run recovers that completed file even if there are no other downloads to perform.
 
 ## Commands
 
@@ -385,8 +386,8 @@ Generates diagnostic information intended for maintenance and troubleshooting. `
 
 For `update`, `download`, `verify`, `import`, and `backup`, the default selection is the current computer's operating system and detected language. If detection fails or the detected value is not offered by GOG, the script falls back to Windows and English.
 
-- Use `--os` to explicitly select operating systems.
-- Use `--lang` to explicitly select languages.
+- Use `--os windows linux mac` to explicitly select operating systems.
+- Use `--lang en de` to explicitly select languages.
 - Use `--skipos` and `--skiplang` to exclude values instead.
 - The include and exclude forms for the same dimension are mutually exclusive.
 
@@ -411,7 +412,7 @@ Configuration precedence (highest first):
 3. `[common]`.
 4. Built-in defaults.
 
-Boolean settings accept `true`/`yes`/`on`/`1` and `false`/`no`/`off`/`0`. Lists can be comma-separated or one item per line. Empty values use the built-in default. Unknown keys produce warnings; invalid values stop the command with an explanatory message. The program does not overwrite an existing configuration file.
+Boolean settings accept `true`/`yes`/`on`/`1` and `false`/`no`/`off`/`0`. Lists must be separated by commas or written one item per line; spaces and semicolons are not list separators. Section names and `os` and `lang` values must be lowercase. Option names may use any case. Game IDs and names are matched without regard to case. Empty values use the built-in default. Unknown keys produce warnings; invalid values stop the command with an explanatory message. The program does not overwrite an existing configuration file. These rules are also described in the header of newly generated configuration files; existing files are left unchanged.
 
 Example:
 
@@ -456,6 +457,8 @@ The program keeps its state files in the current working directory (unless confi
 
 ### Manifest format and recovery
 
+Older manifests without stored `api_downlink` information remain supported. If chunk information cannot be retrieved for a file (for example, when an older manifest is used with a signed download URL), that file is downloaded without chunk verification rather than failing because the chunk information is unavailable.
+
 The manifest and resume manifest are written as indented JSON by default. Existing legacy-format manifests remain readable. To write the old format:
 
 ```bash
@@ -476,7 +479,9 @@ Logs are written to `gogrepo.log`, with timestamps and severity levels. Common o
 - `--debug`: enable additional debug output.
 - Log rotation is configurable in `gogrepo_delta.cfg`.
 
-At the end of a command, the program reports a summary of completed work and lists failures with reasons. Exit status:
+At the end of a command, the program reports a summary of completed work and lists failures with reasons. Completed files recovered from an earlier interrupted run are included in the recovery count.
+
+When a chunk download is incomplete, the chunk-verification retry loop waits for `http_retry_delay` before each retry, except after the final attempt. The wait occurs outside the download job lock, so other downloads can proceed. With the default settings, retry delays can add up to 20 seconds (4 retries × 5 seconds) before the download gives up. Exit status:
 
 - `0`: command completed without reported failures.
 - `1`: one or more failures occurred, a fatal error occurred, or the run was interrupted.
@@ -494,7 +499,9 @@ A command can therefore complete most of its work and still return `1`. This is 
 
 ## Credits and links
 
-- Original project: [gogrepoc](https://github.com/kalanyr/gogrepoc)
+- Current repository: [MarS301/gogrepo_delta](https://github.com/MarS301/gogrepo_delta)
+- Original projects: `eddie3` and `kalaynr`
+- Current version contributors: `MarS301` and `claude.ai`
 - GOG: [https://www.gog.com/](https://www.gog.com/)
 
 See [CHANGELOG.md](CHANGELOG.md) for the changes documented for this version.
