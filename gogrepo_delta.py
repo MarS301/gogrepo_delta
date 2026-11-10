@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.51'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.55'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -425,8 +425,10 @@ INFO_FILENAME = r'!info.txt'
 
 
 #github API URLs
-REPO_HOME_URL = "https://api.github.com/repos/MarS301/gogrepo_delta"   # for update_self (not connected to any command, see the known issues in CHANGELOG.md)
+REPO_HOME_URL = "https://api.github.com/repos/MarS301/gogrepo_delta"   # for selfupdate, and for update_self (not connected to any command, see the known issues in CHANGELOG.md)
 NEW_RELEASE_URL = "/releases/latest"
+RELEASES_PAGE_URL = "https://github.com/MarS301/gogrepo_delta/releases"   # where selfupdate sends the user; a release address from GitHub is only shown if it starts with this
+SELFUPDATE_MAX_BYTES = 1024 * 1024   # selfupdate reads at most this much of GitHub's answer
 
 # GOG URLs
 GOG_HOME_URL = r'https://www.gog.com'
@@ -3207,18 +3209,26 @@ def build_parser():
     g1.add_argument('-delimiter', action='store', default=None, help="column separator of the CSV file; default is ';' for most languages (what their Excel expects) and ',' for English, Japanese, Chinese, Korean, Thai and Hebrew")
     add_common_flags(g1)
 
-    g1 = sp1.add_parser('clean', help='Clean your games directory of files not known by manifest')
-    g1.add_argument('cleandir', action='store', help='root directory containing gog games to be cleaned')
-    g1.add_argument('-dryrun', action='store_true', help='do not move files, only display what would be cleaned')
+    g1 = sp1.add_parser('clean', help='Clean up your games directory: move files not known by the manifest to !orphaned (default), remove unfinished downloads (-partials, -provisional) or permanently delete from !orphaned (-trash)')
+    g1.add_argument('gamedir', action='store', help='root directory containing gog games to be cleaned')
+    g1.add_argument('-dryrun', action='store_true', help='do not move or delete anything, only display what would be done')
+    g1.add_argument('-orphans', action='store_true', help='move files and folders that are not in the manifest to !orphaned (the default when no other stage is given; cannot be combined with -trash)')
+    g1.add_argument('-partials', action='store_true', help='permanently delete the unfinished downloads in !downloading (not the finished files waiting in !downloading/!provisional)')
+    g1.add_argument('-provisional', action='store_true', help='permanently delete the finished files that wait in !downloading/!provisional to be moved into place; the next download would fetch them again')
+    g1.add_argument('-trash', action='store_true', help='permanently delete orphaned files from !orphaned (only strict duplicates of game files, matching size and MD5, unless -installers, -images, -folders or -relaxed say more); run it as a separate step after -orphans, never together with it')
+    g1.add_argument('-installers', action='store_true', help='with -trash: also delete file types used as installers even if they are not duplicates')
+    g1.add_argument('-images', action='store_true', help='with -trash: also delete !images subfolders that have a corresponding !images subfolder (with -relaxed no corresponding game is needed)')
+    g1.add_argument('-folders', action='store_true', help='with -trash: also delete orphaned game folders that have a corresponding game folder (with -relaxed no corresponding game folder is needed)')
+    g1.add_argument('-relaxed', action='store_true', help='with -trash: be more relaxed, files are not verified as true matches before deleting; may affect -images and -folders')
     add_common_flags(g1)
 
-    g1 = sp1.add_parser('clear_partial_downloads', help='Permanently remove all partially downloaded files from your game directory')
+    g1 = sp1.add_parser('clear_partial_downloads', help='(Deprecated, use: clean -partials) Permanently remove all partially downloaded files from your game directory')
     g1.add_argument('gamedir', action='store', help='root directory containing gog games')
-    g1.add_argument('-dryrun', action='store_true', help='do not move files, only display what would be cleaned')
+    g1.add_argument('-dryrun', action='store_true', help='do not delete anything, only display what would be cleaned')
     add_common_flags(g1)
 
 
-    g1 = sp1.add_parser('trash', help='Permanently remove orphaned files in your game directory (removes only strict (matching file size and MD5 hash) duplicates of game files unless other parameters are set)')
+    g1 = sp1.add_parser('trash', help='(Deprecated, use: clean -trash) Permanently remove orphaned files in your game directory (removes only strict (matching file size and MD5 hash) duplicates of game files unless other parameters are set)')
     g1.add_argument('gamedir', action='store', help='root directory containing gog games')
     g1.add_argument('-dryrun', action='store_true', help='do not move files, only display what would be trashed')
 
@@ -3227,6 +3237,10 @@ def build_parser():
     g1.add_argument('-installers', action='store_true', help='also delete file types used as installers even if they are not duplicates.')
     g1.add_argument('-images', action='store_true', help='also delete !images subfolders that have a corresponding !images subfolder. If -relaxed a corresponding game is not required.' )
     g1.add_argument('-relaxed', action='store_true', help = 'more relaxed about what to delete. Does not verify an existing file is a true match before deleting. May effect other parameters, as detailed by them.')
+    add_common_flags(g1)
+
+    g1 = sp1.add_parser('selfupdate', help='Check on GitHub whether a newer release of this program exists. Only looks: nothing is downloaded or installed')
+    g1.add_argument('-check', action='store_true', help='only check (this is all the command does for now, so it is also what happens without this switch)')
     add_common_flags(g1)
 
     g1 = sp1.add_parser('diagnostics', help='Outputs diagnostic data for script maintenance & reports, only fully works if data is properly generated by appropriate update')
@@ -3442,13 +3456,22 @@ CONFIG_NOTES = [
             ('clean', '(deprecated) now the default'))),
     (None, (('output', 'file to write'),
             ('delimiter', "column separator (default ';'; ',' for English, Japanese, Chinese, Korean, Thai and Hebrew)"))),
-    (None, (('cleandir', 'root folder containing the GOG games to clean'),)),
+    (('selfupdate',), (('check', 'only check whether a newer release exists; nothing is downloaded or installed (the only thing the command does)'),)),
+    (('clean',), (('orphans', 'move files and folders not in the manifest to !orphaned (default when no other stage is given; not together with trash)'),
+                  ('partials', 'delete the unfinished downloads in !downloading'),
+                  ('provisional', 'delete the finished files waiting in !downloading/!provisional'),
+                  ('trash', 'delete orphaned files from !orphaned for good (a separate step, not together with orphans)'))),
+    (('clean',), (('installers', 'with trash: also delete file types used as installers even if they are not duplicates'),)),
+    (('clean',), (('folders', 'with trash: also delete orphaned game folders that have a corresponding game folder'),
+                  ('images', 'with trash: also delete !images subfolders that have a corresponding !images subfolder'),
+                  ('relaxed', 'with trash: be more relaxed: no corresponding folder is needed and files are not verified as true '
+                              'matches before deleting'))),
     (('trash',), (('installers', 'also delete file types used as installers even if they are not duplicates'),)),
     (None, (('installersonly', '(deprecated) alias for installers'),)),
-    (None, (('folders', 'also delete orphaned game folders that have a corresponding game folder'),
-            ('images', 'also delete !images subfolders that have a corresponding !images subfolder'),
-            ('relaxed', 'be more relaxed: no corresponding folder is needed and files are not verified as true matches before '
-                        'deleting'))),
+    (('trash',), (('folders', 'also delete orphaned game folders that have a corresponding game folder'),
+                  ('images', 'also delete !images subfolders that have a corresponding !images subfolder'),
+                  ('relaxed', 'be more relaxed: no corresponding folder is needed and files are not verified as true matches before '
+                              'deleting'))),
     (None, (('format', 'how list shows the games: a table, or just the title of each one per line'),)),
     (None, (('verbose', 'output additional data that is usually not useful'),)),
 ]
@@ -3638,6 +3661,11 @@ def process_argv(argv):
 
     if args.command in ('update', 'download', 'backup', 'import', 'verify', 'list'):
         validate_lang_and_os(args)
+
+    if args.command == 'clean':
+        problem = clean_option_problem(args)
+        if problem:
+            sp1.choices['clean'].error(problem)      # prints the usage of clean and the message, exits with status 2
 
     return args
 
@@ -6737,7 +6765,10 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
 
 def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
     orphaned_root_dir = os.path.join(cleandir, ORPHAN_DIR_NAME)
-    for dir in os.listdir(orphaned_root_dir):
+    if not os.path.isdir(orphaned_root_dir):
+        info("there is no '%s' folder in '%s': nothing to trash" % (ORPHAN_DIR_NAME, cleandir))
+        return
+    for dir in sorted(os.listdir(orphaned_root_dir)):
         testdir= os.path.join(orphaned_root_dir,dir)
         if os.path.isdir(testdir):
             reference_dir = os.path.join(cleandir,dir)
@@ -6804,8 +6835,12 @@ def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
 
 
 def cmd_clear_partial_downloads(cleandir,dryrun):
+    """Deletes the unfinished downloads: the game folders in !downloading, except !provisional (see cmd_clear_provisional)."""
     downloading_root_dir = os.path.join(cleandir, DOWNLOADING_DIR_NAME)
-    for dir in os.listdir(downloading_root_dir):
+    if not os.path.isdir(downloading_root_dir):
+        info("there is no '%s' folder in '%s': no partial downloads to delete" % (DOWNLOADING_DIR_NAME, cleandir))
+        return
+    for dir in sorted(os.listdir(downloading_root_dir)):
         if dir != PROVISIONAL_DIR_NAME:
             testdir= os.path.join(downloading_root_dir,dir)
             if os.path.isdir(testdir):
@@ -6818,22 +6853,35 @@ def cmd_clear_partial_downloads(cleandir,dryrun):
                     error("Failed to delete directory: " + testdir)
                     run_report.fail(testdir, 'could not be deleted: ' + str(e))
 
-    provisional_root_dir = os.path.join(cleandir, DOWNLOADING_DIR_NAME,PROVISIONAL_DIR_NAME)
-    for dir in os.listdir(provisional_root_dir):
-        testdir= os.path.join(downloading_root_dir,dir)
-        if os.path.isdir(testdir):
-            try:
+
+def cmd_clear_provisional(cleandir,dryrun):
+    """Deletes what is in !downloading/!provisional: finished files that the next download would move into place. Folders (one per
+    game) and loose files are both removed; the !provisional folder itself stays."""
+    provisional_root_dir = os.path.join(cleandir, DOWNLOADING_DIR_NAME, PROVISIONAL_DIR_NAME)
+    if not os.path.isdir(provisional_root_dir):
+        info("there is no '%s' folder in '%s': no finished files are waiting there" % (os.path.join(DOWNLOADING_DIR_NAME, PROVISIONAL_DIR_NAME), cleandir))
+        return
+    for name in sorted(os.listdir(provisional_root_dir)):
+        path = os.path.join(provisional_root_dir, name)
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
                 if (not dryrun):
-                    shutil.rmtree(testdir)
-                    run_report.count('partial download folders deleted')
-                info("Deleting " + testdir)
-            except Exception as e:
-                error("Failed to delete directory: " + testdir)
-                run_report.fail(testdir, 'could not be deleted: ' + str(e))
+                    shutil.rmtree(path)
+                    run_report.count('provisional folders deleted')
+            else:
+                size = os.path.getsize(path) if os.path.isfile(path) else 0
+                if (not dryrun):
+                    os.remove(path)
+                    run_report.count('provisional files deleted', 1, size)
+            info("Deleting " + path)
+        except Exception as e:
+            error("Failed to delete: " + path)
+            run_report.fail(path, 'could not be deleted: ' + str(e))
 
 
-def cmd_clean(cleandir, dryrun):
-    items = load_manifest()
+def cmd_clean(cleandir, dryrun, items=None):
+    if items is None:
+        items = load_manifest()
     items_by_title = {}
     total_size = 0  # in bytes
     have_cleaned = False
@@ -6943,6 +6991,202 @@ def cmd_clean(cleandir, dryrun):
             save_manifest(items)
     else:
         info('nothing to clean. nice and tidy!')
+
+def clean_option_problem(args):
+    """None if the options of `clean` fit together, else the message to show. -trash deletes for good, so it is never mixed with
+    the stage that makes new orphans (a dry run could not show what a real run would delete), and its refinements (-installers,
+    -images, -folders, -relaxed) do nothing without it."""
+    if args.trash and args.orphans:
+        return ("-orphans and -trash cannot be used in the same run: first move the files to '%s' (clean), look at them, then run "
+                "clean -trash" % ORPHAN_DIR_NAME)
+    refinements = [name for name in ('installers', 'images', 'folders', 'relaxed') if getattr(args, name, False)]
+    if refinements and not args.trash:
+        return '%s can only be used together with -trash' % ', '.join('-' + name for name in refinements)
+    return None
+
+
+def clean_manifest_problem(cleandir, items):
+    """None if the manifest lists games; otherwise the message saying why clean must not run. Without games every folder of the
+    library is 'not in the manifest', so clean would move all of them to !orphaned. This happens when the manifest is read from the
+    wrong place: it is looked for in the current working directory, and a missing manifest (no backup either) reads as an empty one."""
+    if items:
+        return None
+    manifest = os.path.abspath(MANIFEST_FILENAME)
+    if os.path.exists(manifest):
+        state = "lists no games"
+    else:
+        state = "does not exist"
+    return ("clean needs the manifest of your library, but '%s' %s (the manifest is read from the current folder, '%s'). Without it every "
+            "folder in '%s' would count as an unknown game and be moved to '%s'. Nothing was changed. Run clean from the folder that "
+            "holds %s, or run update first to make the manifest"
+            % (manifest, state, os.getcwd(), os.path.abspath(cleandir), ORPHAN_DIR_NAME, MANIFEST_FILENAME))
+
+
+def clean_target_problem(cleandir, items):
+    """None if cleandir looks like the library folder that contains the game folders; otherwise the message saying why clean must not
+    run on it. The mistake it catches: giving clean the folder of ONE game. Then the subfolders of that game (extras, ...) count as
+    game folders, none is in the manifest, and they would all be moved to !orphaned, while the files of the game, which are what the
+    person wanted looked at, are never checked.
+    A folder is taken for a library as soon as one of its subfolders is a game folder of the manifest. Otherwise it is taken for the folder of
+    one game if its own name is the folder name of a game of the manifest, or if it contains a file of the manifest (an installer or extra)
+    of one game."""
+    if not os.path.isdir(cleandir):
+        return "'%s' is not a folder" % cleandir
+    game_folders = {}
+    for item in items:
+        game_folders.setdefault(os.path.normcase(getattr(item, 'folder_name', None) or item.title), item)
+    entries = sorted(os.listdir(cleandir))
+    for name in entries:
+        if name not in ORPHAN_DIR_EXCLUDE_LIST and os.path.isdir(os.path.join(cleandir, name)) and os.path.normcase(name) in game_folders:
+            return None
+    full = os.path.abspath(cleandir)
+    own_name = os.path.normcase(os.path.basename(full))
+    why, found = None, None
+    if own_name in game_folders:
+        found, why = game_folders[own_name], "its name is the folder name of that game"
+    else:
+        files = {os.path.normcase(name): name for name in entries if os.path.isfile(os.path.join(cleandir, name))}
+        for key in sorted(game_folders):
+            item = game_folders[key]
+            for download in (getattr(item, 'downloads', []) + getattr(item, 'galaxyDownloads', []) + getattr(item, 'sharedDownloads', []) + getattr(item, 'extras', [])):
+                if os.path.normcase(download.name) in files:
+                    found, why = item, "it contains the file '%s' of that game" % files[os.path.normcase(download.name)]
+                    break
+            if found is not None:
+                break
+    if found is None:
+        return None
+    return ("'%s' looks like the folder of one game ('%s': %s), not like the library folder that contains all the game folders. "
+            "clean checks the folders inside the folder you give it, so here it would take the subfolders of this game for games of "
+            "their own and move them to '%s'. Nothing was changed. Run it on the folder that contains this one instead: '%s'"
+            % (full, getattr(found, 'folder_name', None) or found.title, why, ORPHAN_DIR_NAME, os.path.dirname(full)))
+
+
+def cmd_clean_stages(gamedir, orphans, partials, provisional, trash, installers, images, folders, relaxed, dryrun):
+    """`clean`: the stages that were asked for, in this order: unfinished downloads (-partials), finished files waiting in
+    !provisional (-provisional), moving unknown files to !orphaned (-orphans), deleting from !orphaned (-trash). Without any stage
+    only the move to !orphaned runs, as clean always did. Only that stage needs the manifest."""
+    if not (partials or provisional or trash):
+        orphans = True
+    items = None
+    if orphans:
+        # Looked at before any stage runs, so a wrong folder is refused before anything is touched, also by -partials or -provisional
+        # in the same run. Only this stage has a manifest to look at: the others work on !downloading and !orphaned alone.
+        items = load_manifest()
+        problem = clean_manifest_problem(gamedir, items)
+        if problem:
+            error(problem)
+            run_report.fail(gamedir, 'clean stopped: there is no manifest that lists games')
+            return
+        problem = clean_target_problem(gamedir, items)
+        if problem:
+            error(problem)
+            run_report.fail(gamedir, 'clean stopped: this does not look like the library folder')
+            return
+    if partials:
+        info("clean: unfinished downloads")
+        cmd_clear_partial_downloads(gamedir, dryrun)
+    if provisional:
+        info("clean: finished files waiting in '%s'" % os.path.join(DOWNLOADING_DIR_NAME, PROVISIONAL_DIR_NAME))
+        cmd_clear_provisional(gamedir, dryrun)
+    if orphans:
+        if partials or provisional:
+            info("clean: files and folders that are not in the manifest")
+        cmd_clean(gamedir, dryrun, items)
+    if trash:
+        info("clean: deleting from '%s' for good" % ORPHAN_DIR_NAME)
+        cmd_trash(gamedir, installers, images, folders, relaxed, dryrun)
+
+
+class SelfUpdateError(Exception):
+    """The release check could not be completed; the message says why, in words for the user."""
+
+
+def parse_release_version(tag):
+    """(major, minor, patch) of a release tag like 'v0.5.53' or '0.5.53', or None if it is not of that form. Anything else GitHub
+    might send (a name with text, 'latest', an empty value) is rejected rather than guessed at."""
+    match = re.match(r'^v?(\d{1,4})\.(\d{1,4})\.(\d{1,6})$', tag.strip()) if isinstance(tag, str) else None
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def printable_text(text, limit=80):
+    """Text that came from the internet, made safe to show on the console: control characters (escape sequences, line breaks) become
+    spaces, runs of spaces become one, and a long text is cut."""
+    text = ''.join(ch if ch.isprintable() else ' ' for ch in str(text))
+    text = ' '.join(text.split())
+    return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
+def fetch_latest_release():
+    """Asks GitHub for the newest published release and returns {'version': (major, minor, patch), 'tag': text, 'title': text, 'url': text}.
+    Raises SelfUpdateError if that is not possible or the answer is not what was expected. A plain request to the public GitHub API:
+    no login data of any kind is sent (the GOG token is never involved), nothing is written to disk, redirects are not followed and the
+    answer is read only up to SELFUPDATE_MAX_BYTES."""
+    session = makeGitHubSession()
+    try:
+        response = session.get(REPO_HOME_URL + NEW_RELEASE_URL, timeout=HTTP_TIMEOUT, allow_redirects=False, stream=True)
+    except requests.RequestException as e:
+        raise SelfUpdateError('could not reach GitHub (%s)' % type(e).__name__)
+    try:
+        status = response.status_code
+        if status in (301, 302, 303, 307, 308):
+            raise SelfUpdateError('GitHub redirected the request (the repository may have moved); look at %s yourself' % RELEASES_PAGE_URL)
+        if status == 404:
+            raise SelfUpdateError('GitHub knows no published release of the repository')
+        if status in (403, 429):
+            raise SelfUpdateError('GitHub refused the request (HTTP %d, probably its limit for requests without a login); try again later' % status)
+        if status != 200:
+            raise SelfUpdateError('GitHub answered with HTTP %d' % status)
+        body, size = [], 0
+        try:
+            for chunk in response.iter_content(chunk_size=16384):
+                size += len(chunk)
+                if size > SELFUPDATE_MAX_BYTES:
+                    raise SelfUpdateError("GitHub's answer is unexpectedly large and was ignored")
+                body.append(chunk)
+        except requests.RequestException as e:
+            raise SelfUpdateError('the answer of GitHub was interrupted (%s)' % type(e).__name__)
+    finally:
+        response.close()
+    try:
+        release = json.loads(b''.join(body).decode('utf-8'))
+    except ValueError:
+        raise SelfUpdateError("the answer of GitHub could not be understood")
+    if not isinstance(release, dict):
+        raise SelfUpdateError("the answer of GitHub could not be understood")
+    if release.get('draft') or release.get('prerelease'):
+        raise SelfUpdateError('GitHub named a draft or pre-release as the latest release; ignored')
+    version = parse_release_version(release.get('tag_name'))
+    if version is None:
+        raise SelfUpdateError('the latest release has a tag that is not a version number (%s)' % printable_text(release.get('tag_name')))
+    url = release.get('html_url')
+    if not (isinstance(url, str) and url.startswith(RELEASES_PAGE_URL + '/')):
+        url = RELEASES_PAGE_URL      # never show an address from the answer unless it is on this repository's release pages
+    return {'version': version, 'tag': printable_text(release['tag_name'], 40), 'title': printable_text(release.get('name') or '', 80), 'url': url}
+
+
+def cmd_selfupdate(check=True):
+    """Says whether a newer release exists. Downloads and installs nothing, on purpose: a program that holds a GOG login must not
+    replace itself from the internet without a way to check what it gets (signed releases are a later step, see the changelog)."""
+    current = parse_release_version(__version__)
+    info('this is version %s' % __version__)
+    try:
+        latest = fetch_latest_release()
+    except SelfUpdateError as e:
+        error('could not check for a newer release: %s' % e)
+        run_report.fail('release check', str(e))
+        return
+    shown = latest['tag'] + (' (%s)' % latest['title'] if latest['title'] and latest['title'] != latest['tag'] else '')
+    if current is None or latest['version'] > current:
+        info('a newer release is available: %s' % shown)
+        info('get it from %s' % latest['url'])
+        info('nothing was downloaded or installed. Before you run a downloaded file, check it against SHA256SUMS and its build attestation (README: "Verifying a download").')
+        run_report.count('newer releases available')
+    elif latest['version'] == current:
+        info('this is the latest release (%s)' % shown)
+    else:
+        info('this version is newer than the latest release (%s): a development version?' % shown)
+
 
 def update_self():
     #To-Do: add auto-update to main using Last-Modified (repo for rolling, latest release for standard)
@@ -7079,9 +7323,10 @@ def main(args):
             args.skipshared = True
         cmd_backup(args.src_dir, args.dest_dir,args.skipextras,args.os,args.lang,args.ids,args.skipids,args.skipgalaxy,args.skipstandalone,args.skipshared,lang_fallback=args.lang_fallback)
     elif args.command == 'clear_partial_downloads':
+        warn("the command clear_partial_downloads is deprecated and will be removed; use: clean -partials")
         cmd_clear_partial_downloads(args.gamedir,args.dryrun)
     elif args.command == 'clean':
-        cmd_clean(args.cleandir, args.dryrun)
+        cmd_clean_stages(args.gamedir, args.orphans, args.partials, args.provisional, args.trash, args.installers, args.images, args.folders, args.relaxed, args.dryrun)
     elif args.command == 'list':
         cmd_list(args.words, args.os, args.skipos, args.lang, args.skiplang, args.format)
     elif args.command == 'export':
@@ -7089,9 +7334,12 @@ def main(args):
     elif args.command == 'wishlist':
         cmd_wishlist(args.output, args.csv, args.prices, args.country, args.currency, args.delimiter)
     elif args.command == "trash":
+        warn("the command trash is deprecated and will be removed; use: clean -trash (with -installers, -images, -folders, -relaxed as before)")
         if (args.installersonly):
             args.installers = True
         cmd_trash(args.gamedir,args.installers,args.images,args.folders,args.relaxed,args.dryrun)
+    elif args.command == 'selfupdate':
+        cmd_selfupdate(args.check)
     elif args.command == "diagnostics":
         cmd_output_diagnostic_data(args.verbose)
 

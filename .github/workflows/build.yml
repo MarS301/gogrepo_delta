@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write       # lets the attestation step sign with GitHub's identity
+  attestations: write
 
 jobs:
   build:
@@ -153,3 +155,53 @@ jobs:
           gh release upload "${TAG_NAME}" \
             "release/gogrepo_delta-${VERSION}-${{ matrix.platform }}.${{ matrix.archive_ext }}" \
             --clobber
+
+  # Runs when all platform builds have uploaded their archive. Writes SHA256SUMS for every file of the release (the archives and the
+  # script itself), uploads it and the script, and attests all of them so that users can check a download (see the README).
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect the release files and write SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          mkdir checksums
+          cd checksums
+          gh release download "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --pattern 'gogrepo_delta-*'
+
+          # One archive per platform of the build matrix (5). A different number means a build is missing or something unexpected is
+          # attached to the release: do not publish checksums for an incomplete release.
+          COUNT=$(ls | wc -l)
+          if [ "${COUNT}" -ne 5 ]; then
+            echo "::error::Expected 5 archives on release '${TAG_NAME}', found ${COUNT}:"
+            ls
+            exit 1
+          fi
+
+          # The script of the tagged commit; users who run the Python file instead of a binary get it from the release as well.
+          cp ../gogrepo_delta.py .
+
+          sha256sum gogrepo_delta-* gogrepo_delta.py > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Attest the release files
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: "checksums/*"
+
+      - name: Upload SHA256SUMS and the script to the release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          gh release upload "${TAG_NAME}" checksums/SHA256SUMS checksums/gogrepo_delta.py --clobber

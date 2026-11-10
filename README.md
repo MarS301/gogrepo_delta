@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.51-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.55-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -39,7 +39,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.51` |
+| **Current version** | `v0.5.55` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -51,6 +51,7 @@ library and helps you maintain a dependable, verifiable local collection.
 - [Requirements and installation](#requirements-and-installation)
   - [Required dependencies](#required-dependencies)
   - [Optional dependencies](#optional-dependencies)
+  - [Verifying a download](#verifying-a-download)
 - [Quick start](#quick-start)
   - [1. Sign in to GOG](#1-sign-in-to-gog)
   - [2. Update the manifest](#2-update-the-manifest)
@@ -68,8 +69,8 @@ library and helps you maintain a dependable, verifiable local collection.
   - [export](#export)
   - [wishlist](#wishlist)
   - [clean](#clean)
-  - [clear_partial_downloads](#clear_partial_downloads)
-  - [trash](#trash)
+  - [clear_partial_downloads and trash (deprecated)](#clear_partial_downloads-and-trash-deprecated)
+  - [selfupdate](#selfupdate)
   - [diagnostics](#diagnostics)
 - [Selecting games by tag](#selecting-games-by-tag)
 - [Operating system and language selection](#operating-system-and-language-selection)
@@ -144,6 +145,25 @@ The script must be started with a Python interpreter; do not execute it as a she
 - **Linux/Unix:** PyQt5 with QtDBus support can be used for desktop-session sleep inhibition where supported.
 - **macOS:** PyObjC components, including CoreFoundation support, are used for macOS-specific power-management functionality.
 - **Windows:** required Windows API calls use Python's built-in `ctypes` module.
+
+### Verifying a download
+
+From the release that follows this change on, every release on GitHub carries the program binaries for each platform, `gogrepo_delta.py` itself and a file `SHA256SUMS` that lists the SHA-256 checksum of each of them. Every one of these files also has a signed build attestation from GitHub. Check what you downloaded before you run it, because the program holds your GOG login:
+
+1. **Checksum** (finds a damaged or incomplete download). Put `SHA256SUMS` next to the files and run, on Linux:
+
+   ```bash
+   sha256sum -c SHA256SUMS --ignore-missing
+   ```
+
+   On macOS use `shasum -a 256 -c SHA256SUMS` (it complains about the files you did not download; that is fine). On Windows PowerShell, `Get-FileHash .\gogrepo_delta-<version>-win-x64.zip -Algorithm SHA256` shows the value to compare with the line in `SHA256SUMS`.
+2. **Attestation** (shows that the file was built by this repository's release workflow and was not replaced afterwards). With the [GitHub CLI](https://cli.github.com/):
+
+   ```bash
+   gh attestation verify gogrepo_delta-<version>-linux-x64.tar.gz --repo MarS301/gogrepo_delta
+   ```
+
+What this does and does not protect against: `SHA256SUMS` lies next to the files on the same page, so on its own it only proves that the download is intact. The attestation is what ties a file to the repository's workflow. Neither tells you that the repository itself is free of bad changes; they only make a silently swapped file visible. Older releases have neither.
 
 ## Quick start
 
@@ -222,9 +242,10 @@ Every command supports `-h` or `--help`. Both the original single-dash long opti
 | `list` | List or search games in the manifest. |
 | `export` | Export manifest entries to CSV. |
 | `wishlist` | Save the GOG wishlist and show what changed since the last run. |
-| `clean` | Move files unknown to the manifest into `!orphaned`. |
-| `clear_partial_downloads` | Remove incomplete download files. |
-| `trash` | Permanently remove selected orphaned/duplicate files. |
+| `clean` | Move files unknown to the manifest into `!orphaned`; with switches also remove unfinished downloads (`--partials`, `--provisional`) or permanently delete from `!orphaned` (`--trash`). |
+| `clear_partial_downloads` | Deprecated: use `clean --partials`. |
+| `trash` | Deprecated: use `clean --trash`. |
+| `selfupdate` | Check on GitHub whether a newer release exists (looks only, installs nothing). |
 | `diagnostics` | Generate diagnostic information for troubleshooting. |
 
 ### `login`
@@ -408,33 +429,47 @@ The wishlist and price addresses are not officially documented by GOG and could 
 python gogrepo_delta.py clean "/path/to/GOG games" --dryrun
 ```
 
-Moves files not known to the manifest into the `!orphaned` directory. Use `--dryrun` to preview the operation.
+One command for all clean-up of the games folder. Without a stage switch it moves files and folders that are not in the manifest into the `!orphaned` directory, exactly as before. The switches below select the other stages; each stage only runs when asked for, and they run in this order. `--dryrun` applies to every stage and shows what would be done.
 
-### `clear_partial_downloads`
+| Switch | Stage |
+|---|---|
+| `--partials` | Permanently deletes the unfinished downloads in `!downloading` (not the finished files in `!downloading/!provisional`). |
+| `--provisional` | Permanently deletes the finished files that wait in `!downloading/!provisional`. The next `download` would move them into place; after this switch it fetches them again. |
+| `--orphans` | Moves files and folders that are not in the manifest to `!orphaned` (the default when no other stage is given). The only stage that reads the manifest. |
+| `--trash` | Permanently deletes from `!orphaned`. By default only strict duplicates of known game files (same size and MD5). |
 
-```bash
-python gogrepo_delta.py clear_partial_downloads "/path/to/GOG games" --dryrun
-```
-
-Removes partial download files. Use `--dryrun` to preview the operation.
-
-### `trash`
-
-```bash
-python gogrepo_delta.py trash "/path/to/GOG games" --dryrun
-```
-
-By default, `trash` removes strict duplicates of known game files, matching file size and MD5 checksum.
-
-Options:
-- `--dryrun`: preview what would be removed.
+Options for `--trash` (they are refused without it):
 - `--installers`: also delete installer file types even when they are not duplicates.
 - `--folders`: also delete orphaned game folders when a corresponding game folder exists.
 - `--images`: also delete orphaned `!images` directories when a corresponding images directory exists.
 - `--relaxed`: relax duplicate checks and deletion requirements; use with care.
-- `--installersonly`: deprecated alias for `--installers`.
 
-**Warning:** `trash` permanently deletes files. Always run it with `--dryrun` first and inspect the output.
+Give `clean` the library folder, the one that contains all the game folders, not the folder of one game. If the folder you give looks like a single game's folder (its name is a game folder of the manifest, or it holds an installer or extra of a game and no game folders), `clean` stops with a message before it changes anything and tells you which folder to use. `clean` also stops if there is no manifest that lists games: the manifest `gog-manifest.dat` is read from the current folder, so run `clean` from the folder that holds it (or run `update` first). Both checks are part of the `--orphans` stage, which is the only one that reads the manifest.
+
+`--orphans` and `--trash` cannot be used in the same run: first move the files (`clean`), look into `!orphaned`, then run `clean --trash` as a separate step. Examples:
+
+```bash
+python gogrepo_delta.py clean "/path/to/GOG games" --partials --dryrun
+python gogrepo_delta.py clean "/path/to/GOG games" --trash --folders --dryrun
+```
+
+**Warning:** `--partials`, `--provisional` and `--trash` permanently delete files. Always run them with `--dryrun` first and inspect the output.
+
+### `clear_partial_downloads` and `trash` (deprecated)
+
+`clear_partial_downloads` and `trash` still work and take the same options as before, but print a warning and will be removed in a later version. Use `clean --partials` instead of `clear_partial_downloads`, and `clean --trash` (with `--installers`, `--images`, `--folders`, `--relaxed`, and `--installersonly` as `--installers`) instead of `trash`.
+
+### `selfupdate`
+
+```bash
+python gogrepo_delta.py selfupdate
+```
+
+Checks on GitHub whether a newer release of this program exists and tells you its version and the address of its release page. **It only looks.** Nothing is downloaded, nothing is replaced; to update, download the release yourself and [verify it](#verifying-a-download) first. `--check` is accepted for clarity and changes nothing (checking is all the command does).
+
+This is the only command that contacts a server other than GOG. It sends one plain request to `api.github.com` (no login data, no GOG token, nothing from your library) and writes nothing to disk. It exits with status `0` when the check worked, whether or not a newer release exists, and with `1` when it could not be done (no network, GitHub refused the request, an unexpected answer). GitHub limits requests without a login to about 60 per hour per address, which is plenty for an occasional check.
+
+Why it does not install anything: the program holds your GOG login, so it must not replace itself from the internet unless it can prove that what arrives is the real release. That needs signed releases, which are planned but not available yet.
 
 ### `diagnostics`
 

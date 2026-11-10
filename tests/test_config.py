@@ -720,7 +720,7 @@ class CompactLayoutTests(ConfigTestCase):
             self.assertEqual(len(where[dest]), 1, dest)
             self.assertEqual(where[dest][0][0], 'common', dest)
         # an option that means something else in other commands is listed in each of them, with its own comment
-        self.assertEqual(sorted(where['installers']), [('trash', True), ('update', True)])
+        self.assertEqual(sorted(where['installers']), [('clean', True), ('trash', True), ('update', True)])
 
     def test_an_option_that_means_something_else_in_another_command_is_explained_again(self):
         def comment_of(section, key):
@@ -730,6 +730,7 @@ class CompactLayoutTests(ConfigTestCase):
                         if key in keys:
                             return comment
         self.assertNotEqual(comment_of('update', 'installers'), comment_of('trash', 'installers'))
+        self.assertNotEqual(comment_of('clean', 'installers'), comment_of('trash', 'installers'))
         self.assertNotEqual(comment_of('import', 'src_dir'), comment_of('backup', 'src_dir'))
         for section, key in (('update', 'installers'), ('trash', 'installers'), ('import', 'dest_dir'), ('backup', 'dest_dir')):
             self.assertIsNotNone(comment_of(section, key), (section, key))
