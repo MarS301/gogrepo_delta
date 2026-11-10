@@ -105,7 +105,8 @@ class MainTests(unittest.TestCase):
         def failing_clean(*a, **k):
             g.run_report.count('files moved to the orphan folder', 1, 10)
             g.run_report.fail('game/junk.txt', 'could not be moved')
-        with mock.patch.object(g, 'cmd_clean', failing_clean), self.assertLogs('gogrepoc', level='INFO') as logs:
+        with mock.patch.object(g, 'cmd_clean', failing_clean), mock.patch.object(g, 'clean_target_problem', return_value=None), mock.patch.object(g, 'clean_manifest_problem', return_value=None), \
+                self.assertLogs('gogrepoc', level='INFO') as logs:
             status = g.main(self.args('clean', 'somedir'))
         self.assertEqual(status, 1)
         messages = [r.getMessage() for r in logs.records]
@@ -113,13 +114,13 @@ class MainTests(unittest.TestCase):
         self.assertIn('      game/junk.txt: could not be moved', messages)
 
     def test_main_returns_zero_otherwise(self):
-        with mock.patch.object(g, 'cmd_clean'):
+        with mock.patch.object(g, 'cmd_clean'), mock.patch.object(g, 'clean_target_problem', return_value=None), mock.patch.object(g, 'clean_manifest_problem', return_value=None):
             self.assertEqual(g.main(self.args('clean', 'somedir')), 0)
 
     def test_a_failure_in_one_run_does_not_leak_into_the_next(self):
-        with mock.patch.object(g, 'cmd_clean', lambda *a, **k: g.run_report.fail('x')):
+        with mock.patch.object(g, 'cmd_clean', lambda *a, **k: g.run_report.fail('x')), mock.patch.object(g, 'clean_target_problem', return_value=None), mock.patch.object(g, 'clean_manifest_problem', return_value=None):
             self.assertEqual(g.main(self.args('clean', 'somedir')), 1)
-        with mock.patch.object(g, 'cmd_clean'):
+        with mock.patch.object(g, 'cmd_clean'), mock.patch.object(g, 'clean_target_problem', return_value=None), mock.patch.object(g, 'clean_manifest_problem', return_value=None):
             self.assertEqual(g.main(self.args('clean', 'somedir')), 0)
 
 

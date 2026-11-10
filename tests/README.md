@@ -27,6 +27,10 @@ The tests run inside a scratch folder that is removed afterwards (`_bootstrap.py
 | test_ids | name matching and `-ids` / `-skipids` (exact, normalised, ambiguous, typos, unquoted words), suggestions, `list` command (search, table, filters, output streams), and how download, verify, import and backup use them |
 | test_chunk_tree | `fetch_chunk_tree`: every branch of getting a file's checksum data, including the signed-address case that used to raise NameError |
 | test_chunk_retry | the retry loop of chunk verification: waits `http_retry_delay` between tries, none after the last, not holding the lock |
+| test_clean_manifest | `clean` refusing to run without a manifest that lists games (started in the wrong folder, or an empty manifest): nothing on disk changes, other stages of the run do not start, `-partials` alone still works |
+| test_clean_target | `clean` refusing the folder of a single game: the rules for telling a library from a game folder, the mistake through `main` (nothing on disk changes), and the cases that must keep working |
+| test_clean_stages | `clean` with its stages (`-partials`, `-provisional`, `-orphans`, `-trash`): order, combination rules, dry run, missing folders, the `!provisional` fix, and the deprecated `trash` / `clear_partial_downloads` commands |
+| test_selfupdate | `selfupdate`: reading the release tag, the plain request to GitHub (faked), every failure as a message, nothing from the answer trusted blindly, no GOG data or disk writes |
 | test_log_header | the first line of every run in the log file: version, Python and system (not on the console, not with `-nolog`) |
 | test_isolation | the whole test run happens in a scratch folder, so no test can overwrite a manifest or log in the folder it was started from |
 | test_update_warning | the warning when an update is about to narrow the manifest: the counting (systems, languages, the English fallback, ids, skipids), the wording, and that `cmd_update` checks once with the lists it will use |
