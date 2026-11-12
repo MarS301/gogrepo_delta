@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.55'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.60'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -31,6 +31,7 @@ import tempfile
 import tokenize
 import difflib
 import os
+import stat
 import sys
 import threading
 import atexit
@@ -3220,6 +3221,8 @@ def build_parser():
     g1.add_argument('-images', action='store_true', help='with -trash: also delete !images subfolders that have a corresponding !images subfolder (with -relaxed no corresponding game is needed)')
     g1.add_argument('-folders', action='store_true', help='with -trash: also delete orphaned game folders that have a corresponding game folder (with -relaxed no corresponding game folder is needed)')
     g1.add_argument('-relaxed', action='store_true', help='with -trash: be more relaxed, files are not verified as true matches before deleting; may affect -images and -folders')
+    g1.add_argument('-all', action='store_true', help='with -trash: delete EVERYTHING in !orphaned (loose files, folders, subfolders), not only duplicates; asks first (shows what will be deleted); cannot be combined with -installers, -images, -folders or -relaxed')
+    g1.add_argument('-yes', action='store_true', help='with -trash -all: do not ask for confirmation. Needed when there is no terminal to ask on (scheduled tasks); leave it off otherwise')
     add_common_flags(g1)
 
     g1 = sp1.add_parser('clear_partial_downloads', help='(Deprecated, use: clean -partials) Permanently remove all partially downloaded files from your game directory')
@@ -3461,6 +3464,8 @@ CONFIG_NOTES = [
                   ('partials', 'delete the unfinished downloads in !downloading'),
                   ('provisional', 'delete the finished files waiting in !downloading/!provisional'),
                   ('trash', 'delete orphaned files from !orphaned for good (a separate step, not together with orphans)'))),
+    (('clean',), (('all', 'with trash: delete everything in !orphaned (asks first); not together with installers, images, folders or relaxed'),
+                  ('yes', 'with trash and all: do not ask first (for unattended runs; leave off in a config file you also use by hand)'))),
     (('clean',), (('installers', 'with trash: also delete file types used as installers even if they are not duplicates'),)),
     (('clean',), (('folders', 'with trash: also delete orphaned game folders that have a corresponding game folder'),
                   ('images', 'with trash: also delete !images subfolders that have a corresponding !images subfolder'),
@@ -3927,12 +3932,70 @@ def _token_mode():
     return mode
 
 
+class TokenModuleMissing(RuntimeError):
+    """The token file needs the 'cryptography' package and it is not installed. A RuntimeError, as it always was; the class lets the top
+    level print the message without a traceback."""
+
+
 def _token_crypto():
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError:
-        raise RuntimeError('Encrypted token storage requires the "cryptography" package. Install it with: python -m pip install cryptography')
+        raise TokenModuleMissing('Encrypted token storage requires the "cryptography" package. Install it with: python -m pip install cryptography')
     return AESGCM
+
+
+_TOKEN_PLAIN_FALLBACK_WARNED = False
+
+
+def _existing_token_state(filepath):
+    """What is at filepath, judged without decrypting anything: 'none' (no file), 'plain', 'encrypted', or 'unreadable' (damaged, not
+    JSON, or not a token file of this program and version)."""
+    if not os.path.exists(filepath):
+        return 'none'
+    try:
+        with open(filepath, mode='r', encoding='utf-8') as r:
+            envelope = json.load(r)
+    except (OSError, ValueError):
+        return 'unreadable'
+    if isinstance(envelope, dict) and envelope.get('format') == _TOKEN_ENVELOPE_FORMAT and envelope.get('version') == _TOKEN_ENVELOPE_VERSION:
+        if envelope.get('encryption') == 'plain':
+            return 'plain'
+        if envelope.get('encryption') == 'encrypted':
+            return 'encrypted'
+    return 'unreadable'
+
+
+def _token_mode_for_writing(filepath):
+    """'plain' or 'encrypted': the mode to write the token file in. The default is encrypted. If the "cryptography" package is missing
+    the token is written as plain text instead, with one warning per run, but ONLY when that cannot destroy anything and nobody asked
+    for encryption: never over an existing encrypted token file (or one that cannot be read), and never when GOGREPO_TOKEN_MODE=encrypted
+    was set on purpose; those stop with a message that says to install the package."""
+    global _TOKEN_PLAIN_FALLBACK_WARNED
+    mode = _token_mode()
+    if mode == 'plain':
+        return 'plain'
+    try:
+        _token_crypto()
+        return 'encrypted'
+    except TokenModuleMissing:
+        pass
+    install = 'python -m pip install cryptography'
+    if os.environ.get(TOKEN_MODE_ENV) is not None:
+        raise TokenModuleMissing('%s=encrypted asks for an encrypted token file, which needs the "cryptography" package. Install it with: %s '
+                                 '(or set %s=plain for a readable plain-text token file)' % (TOKEN_MODE_ENV, install, TOKEN_MODE_ENV))
+    state = _existing_token_state(filepath)
+    if state == 'encrypted':
+        raise TokenModuleMissing('The existing %s is encrypted and the "cryptography" package that writes it is not installed, so it is not '
+                                 'replaced by a plain-text file. Install it with: %s' % (filepath, install))
+    if state == 'unreadable':
+        raise TokenModuleMissing('The existing %s cannot be read, so it is not replaced by a plain-text file. Install the "cryptography" package '
+                                 '(%s), or delete %s and run the login command again' % (filepath, install, filepath))
+    if not _TOKEN_PLAIN_FALLBACK_WARNED:
+        _TOKEN_PLAIN_FALLBACK_WARNED = True
+        warn('The "cryptography" package is not installed, so %s is saved as readable plain text and is NOT encrypted. Install it '
+             '(%s) for a password-encrypted token file.' % (filepath, install))
+    return 'plain'
 
 
 TOKEN_PASSWORD_ATTEMPTS = 3        # how often a wrong password is asked for again when someone is there to type it
@@ -3980,7 +4043,8 @@ def _token_key(password, salt, n=_TOKEN_SCRYPT_N, r=_TOKEN_SCRYPT_R, p=_TOKEN_SC
 
 
 def _write_token_json(token, filepath):
-    mode = _token_mode()
+    mode = _token_mode_for_writing(filepath)
+    state = _existing_token_state(filepath)
     envelope = {
         'format': _TOKEN_ENVELOPE_FORMAT,
         'version': _TOKEN_ENVELOPE_VERSION,
@@ -3992,7 +4056,7 @@ def _write_token_json(token, filepath):
         AESGCM = _token_crypto()
         salt = os.urandom(16)
         nonce = os.urandom(12)
-        password = _token_password(create=not os.path.exists(filepath))
+        password = _token_password(create=(state != 'encrypted'))       # a new password is asked twice, also when a plain file is encrypted now
         key = _token_key(password, salt)
         ciphertext = AESGCM(key).encrypt(nonce, json.dumps(token, separators=(',', ':')).encode('utf-8'),
                                          _TOKEN_ENVELOPE_FORMAT.encode('ascii'))
@@ -4021,7 +4085,11 @@ def _read_token_json(filepath):
     elif encryption == 'encrypted':
         if envelope.get('kdf') != 'scrypt':
             raise ValueError('unsupported token key derivation function')
-        AESGCM = _token_crypto()
+        try:
+            AESGCM = _token_crypto()
+        except TokenModuleMissing:
+            raise TokenModuleMissing('%s is encrypted, but the "cryptography" package that opens it is not installed. Install it with: '
+                                     'python -m pip install cryptography' % filepath)
         import base64
         salt = base64.b64decode(envelope['salt'], validate=True)
         nonce = base64.b64decode(envelope['nonce'], validate=True)
@@ -5993,12 +6061,33 @@ def default_csv_delimiter():
     return ',' if lang in ('en', 'jp', 'cn', 'zh', 'ko', 'th', 'he') else ';'
 
 
+def split_update_time(text):
+    """('2026-06-23', '16:59:00'): the date and the time of an update stamp such as '2026-06-23T18:59:00+02:00', both in UTC, as a spreadsheet
+    wants them (two cells that it shows the way of the computer's language: the ISO forms are understood everywhere). A stamp without a time
+    zone is taken as UTC, as the program stores GOG's stamps. Something that is not a stamp comes back as the date part unchanged, with no time."""
+    if text is None or text == '':
+        return '', ''
+    match = re.match(r'^\s*(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:[.,]\d+)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?\s*$', str(text))
+    if not match:
+        return str(text), ''
+    year, month, day, hour, minute, second, zone = match.groups()
+    try:
+        moment = datetime.datetime(int(year), int(month), int(day), int(hour), int(minute), int(second or 0))
+        if zone and zone != 'Z':
+            digits = zone[1:].replace(':', '')
+            offset = datetime.timedelta(hours=int(digits[:2]), minutes=int(digits[2:] or 0))
+            moment -= offset if zone[0] == '+' else -offset
+    except (ValueError, OverflowError):
+        return str(text), ''
+    return moment.strftime('%Y-%m-%d'), moment.strftime('%H:%M:%S')
+
+
 def cmd_export(output='gog-library.csv', savedir=None, delimiter=None):
     """Write the manifest as a CSV spreadsheet, one row per file (installers, galaxy installers, shared files and extras).
     With savedir an extra column says whether each file exists there with the right size (no checksums are computed)."""
     items = load_manifest()
     delimiter = delimiter or default_csv_delimiter()
-    columns = ['game id', 'title', 'folder', 'kind', 'file', 'operating system', 'language', 'version', 'size (bytes)', 'size', 'md5', 'updated']
+    columns = ['game id', 'title', 'folder', 'kind', 'file', 'operating system', 'language', 'version', 'size (bytes)', 'size', 'md5', 'update date', 'update time (UTC)']
     if savedir:
         columns.append('on disk')
     rows = 0
@@ -6012,9 +6101,10 @@ def cmd_export(output='gog-library.csv', savedir=None, delimiter=None):
                                   ('shared', item.get('sharedDownloads', [])), ('extra', item.get('extras', []))):
                 for entry in entries:
                     size = entry.get('size')
+                    update_date, update_time = split_update_time(entry.get('updated'))
                     row = [item.get('id'), item.get('title'), folder, kind, entry.get('name') or '', entry.get('os_type') or '', entry.get('lang') or '',
                            entry.get('version') or '', size if size is not None else '', pretty_size(size) if isinstance(size, int) else '',
-                           entry.get('md5') or '', entry.get('updated') or '']
+                           entry.get('md5') or '', update_date, update_time]
                     if savedir:
                         path = os.path.join(savedir, str(folder), entry.get('name') or '')
                         if not entry.get('name'):
@@ -6043,6 +6133,17 @@ WISHLIST_FORMAT = 1
 
 class WishlistError(Exception):
     pass
+
+
+class PriceRefused(Exception):
+    """GOG answered the price request of one product with 400. That says something about this product (not for sale, not released, no
+    price for the country) or about the country; one answer cannot tell which, so the caller decides (see PRICE_REFUSALS_BEFORE_COUNTRY_ERROR)."""
+    def __init__(self, text):
+        Exception.__init__(self, text)
+        self.text = text
+
+
+PRICE_REFUSALS_BEFORE_COUNTRY_ERROR = 3     # this many refusals in a row at the start, with no price answered, mean that the country is wrong
 
 
 def parse_gog_money(text):
@@ -6115,8 +6216,19 @@ def fetch_wishlist_price(session, product_id, country, currency=None):
         status = e.response.status_code if e.response is not None else None
         if status == 404:
             return None
-        if status == 400:       # GOG's answer to a country it does not know, for example UK (the code is GB)
-            raise WishlistError("GOG does not accept '%s' as a country for the prices; use the two-letter ISO code, for example GB for the United Kingdom" % country)
+        if status == 400:       # GOG's answer to a country it does not know (for example UK, the code is GB), but also to some products
+            body = ''
+            try:
+                body = e.response.text[:500]
+            except Exception:
+                pass
+            try:                                    # GOG answers with JSON: {"_links": {...}, "message": "Product 123 not found"}
+                message = json.loads(body).get('message')
+                if isinstance(message, str) and message.strip():
+                    body = message
+            except (ValueError, AttributeError):
+                pass                                # not JSON: the text itself is shown
+            raise PriceRefused(printable_text(body, 120) or 'HTTP 400')
         raise
     return choose_price(((data.get('_embedded') or {}).get('prices')), currency)
 
@@ -6227,6 +6339,7 @@ def cmd_wishlist(output=WISHLIST_FILENAME, csv_output=None, prices=False, countr
     except Exception:                                          # the comparison with the library is a bonus
         library_ids = set()
     games = {}
+    price_answers, price_refusals = 0, 0
     for game_id in ids:
         old = (previous or {}).get(game_id) or {}
         entry = dict(old) if old.get('title') else {}
@@ -6245,11 +6358,19 @@ def cmd_wishlist(output=WISHLIST_FILENAME, csv_output=None, prices=False, countr
         if prices:
             try:
                 entry['price'] = fetch_wishlist_price(session, game_id, price_country, currency)
-            except WishlistError as e:                          # GOG does not accept the country: asking again for every game would not help
-                error(str(e))
-                run_report.fail('prices', 'country not accepted')
-                prices = False
-                entry['price'] = old.get('price')
+                price_answers += 1                              # GOG answered (a price, or "none"): the country is known to be fine
+            except PriceRefused as e:
+                price_refusals += 1
+                entry['price'] = old.get('price')               # keep what was known, so that no change is reported by mistake
+                if price_answers == 0 and price_refusals >= PRICE_REFUSALS_BEFORE_COUNTRY_ERROR:
+                    # nothing was answered in all these tries: the country is the likely reason, and asking for every game would not help
+                    error("GOG refused the prices of the first %d games, so it probably does not accept '%s' as a country; use the two-letter ISO "
+                          "code, for example GB for the United Kingdom" % (price_refusals, price_country))
+                    run_report.fail('prices', 'country not accepted')
+                    prices = False
+                else:                                           # one game: not for sale, not released, or no price for the country
+                    warn('GOG refused the price request for %s: "%s"; its price is not known' % (entry.get('title') or game_id, e.text))
+                    run_report.count('prices refused by GOG')
             except requests.RequestException as e:
                 warn('no price for %s: %s' % (entry.get('title') or game_id, e))
                 run_report.fail(entry.get('title') or game_id, 'price not available')
@@ -6257,6 +6378,9 @@ def cmd_wishlist(output=WISHLIST_FILENAME, csv_output=None, prices=False, countr
         else:
             entry['price'] = old.get('price')
         games[game_id] = entry
+    if prices and price_answers == 0 and price_refusals:      # fewer refusals than needed for the country message, and nothing answered
+        warn("GOG refused every price request; if '%s' is not the country you want, give -country the two-letter code" % price_country)
+        run_report.fail('prices', 'refused for every game')
     run_report.count('wishlist games', len(games))
 
     def name(game_id):
@@ -6763,23 +6887,138 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
     if clean_on_fail:
         info('cleaned items....... %d' % clean_file_cnt)
 
+def rmtree_force(path):
+    """shutil.rmtree that also removes read-only files and folders. Windows refuses to delete a file with the read-only attribute (Git
+    sets it on its objects, so a .git folder in !orphaned could not be deleted), and a folder without write permission on POSIX
+    cannot lose its files. A failure that is not a permission problem is raised as usual."""
+    def make_writable_and_retry(func, failed_path, error_info):
+        exc = error_info[1] if isinstance(error_info, tuple) else error_info       # onerror gives exc_info, onexc gives the exception
+        if not isinstance(exc, PermissionError):
+            raise exc
+        targets = [failed_path]
+        if os.path.abspath(failed_path) != os.path.abspath(path):
+            targets.append(os.path.dirname(failed_path))
+        for target in targets:
+            try:
+                os.chmod(target, stat.S_IRWXU)
+            except OSError:
+                pass
+        func(failed_path)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=make_writable_and_retry)                         # onerror is deprecated from 3.12
+    else:
+        shutil.rmtree(path, onerror=make_writable_and_retry)
+
+
+def tree_size(path):
+    """(number of files, bytes) of a file or of everything below a folder. Links are counted as themselves and not followed."""
+    if os.path.islink(path) or not os.path.isdir(path):
+        try:
+            return 1, (0 if os.path.islink(path) else os.path.getsize(path))
+        except OSError:
+            return 1, 0
+    files, size = 0, 0
+    for root, dirs, names in os.walk(path):
+        for name in names:
+            full = os.path.join(root, name)
+            files += 1
+            try:
+                size += 0 if os.path.islink(full) else os.path.getsize(full)
+            except OSError:
+                pass
+    return files, size
+
+
+TRASH_ALL_LISTED_ENTRIES = 20
+TRASH_LIST_PER_FOLDER = 20          # entries listed per folder that is about to be deleted (not in a dry run)
+TRASH_LIST_TOTAL = 200              # lines of folder contents listed in one run (not in a dry run)
+LISTING_INDENT = '      '
+
+
+def folder_contents_lines(path, full, budget):
+    """What is inside the folder at path, as indented lines to show before the folder is deleted.
+    full=True (a dry run): every file below the folder with its path inside the folder and its size, empty folders as '(empty)'; no limit.
+    full=False: the direct contents only, a file with its size and a subfolder as 'name\\ (N files, size)', at most TRASH_LIST_PER_FOLDER
+    entries per folder and, over all the folders that share `budget` (a list with the lines left), TRASH_LIST_TOTAL lines; what is left out
+    is counted. Links are shown as links and never followed."""
+    def size_of(full_path):
+        try:
+            return pretty_size(os.path.getsize(full_path))
+        except OSError:
+            return '?'
+    def describe(full_path, shown_name):
+        if os.path.islink(full_path):
+            return '%s (link)' % shown_name
+        if os.path.isdir(full_path):
+            files, size = tree_size(full_path)
+            return '%s%s (%d file%s, %s)' % (shown_name, os.sep, files, '' if files == 1 else 's', pretty_size(size))
+        return '%s   %s' % (shown_name, size_of(full_path))
+    try:
+        entries = sorted(os.listdir(path))
+    except OSError:
+        return [LISTING_INDENT + '(contents cannot be listed)']
+    if not entries:
+        return [LISTING_INDENT + '(empty)']
+    lines = []
+    if full:
+        for root, dirs, files in os.walk(path):
+            dirs.sort()
+            relative = os.path.relpath(root, path)
+            prefix = '' if relative == '.' else relative + os.sep
+            for name in list(dirs):
+                if os.path.islink(os.path.join(root, name)):         # os.walk lists a link to a folder with the folders; do not go into it
+                    lines.append('%s%s (link)' % (prefix, name))
+                    dirs.remove(name)
+            if not dirs and not files and relative != '.':
+                lines.append('%s%s (empty)' % (relative, os.sep))
+            for name in sorted(files):
+                lines.append(describe(os.path.join(root, name), prefix + name))
+        return [LISTING_INDENT + line for line in lines]
+    shown = 0
+    for name in entries:
+        if shown >= TRASH_LIST_PER_FOLDER or budget[0] <= 0:
+            break
+        lines.append(LISTING_INDENT + describe(os.path.join(path, name), name))
+        shown += 1
+        budget[0] -= 1
+    left = len(entries) - shown
+    if left > 0:
+        if shown < TRASH_LIST_PER_FOLDER:        # stopped by the limit for the whole run, not by the one for this folder
+            lines.append(LISTING_INDENT + '(%d item%s not listed: the limit of %d lines was reached; -dryrun lists everything)'
+                         % (left, '' if left == 1 else 's', TRASH_LIST_TOTAL))
+        else:
+            lines.append(LISTING_INDENT + '... and %d more item%s (-dryrun lists everything)' % (left, '' if left == 1 else 's'))
+    return lines
+
+
 def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
+    """Deletes from !orphaned: files that are exact duplicates of the file of the same name in the game folder of the same name,
+    plus what -installers, -images, -folders and -relaxed add. Says at the end what it looked at and why things were kept."""
     orphaned_root_dir = os.path.join(cleandir, ORPHAN_DIR_NAME)
     if not os.path.isdir(orphaned_root_dir):
         info("there is no '%s' folder in '%s': nothing to trash" % (ORPHAN_DIR_NAME, cleandir))
         return
-    for dir in sorted(os.listdir(orphaned_root_dir)):
+    names = sorted(os.listdir(orphaned_root_dir))
+    loose_files = [name for name in names if not os.path.isdir(os.path.join(orphaned_root_dir, name))]
+    looked_at, duplicates, subfolders = 0, 0, 0
+    kept_no_partner, kept_differs, kept_folders = 0, 0, []
+    listing_budget = [TRASH_LIST_TOTAL]
+    for dir in names:
         testdir= os.path.join(orphaned_root_dir,dir)
         if os.path.isdir(testdir):
+            looked_at += 1
             reference_dir = os.path.join(cleandir,dir)
             refresh_contents = False
             if folders:
                 if relaxed or os.path.isdir(reference_dir):
                     try:
+                        listing = folder_contents_lines(testdir, dryrun, listing_budget)       # before the folder is gone
                         if (not dryrun):
-                            shutil.rmtree(testdir)
+                            rmtree_force(testdir)
                             run_report.count('folders deleted')
                         info("Deleting " + testdir)
+                        for line in listing:
+                            info(line)
                     except Exception as e:
                         error("Failed to delete directory: " + testdir)
                         run_report.fail(testdir, 'could not be deleted: ' + str(e))
@@ -6789,11 +7028,14 @@ def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
                     images_folder = os.path.join(testdir,IMAGES_DIR_NAME)
                     if os.path.isdir(images_folder):
                         if relaxed or os.path.isdir(os.path.join(reference_dir,IMAGES_DIR_NAME)):
+                            listing = folder_contents_lines(images_folder, dryrun, listing_budget)
                             if (not dryrun):
-                                shutil.rmtree(images_folder)
+                                rmtree_force(images_folder)
                                 run_report.count('image folders deleted')
                                 refresh_contents=True
                             info("Deleting " + images_folder )
+                            for line in listing:
+                                info(line)
                 if (refresh_contents):
                     contents = os.listdir(testdir)
                     refresh_contents = False
@@ -6811,17 +7053,25 @@ def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
                     refresh_contents = False
                 if not os.path.isdir(reference_dir):
                     info("Reference directory does not exist so {} can't have duplicates. ".format(testdir))
+                    kept_folders.append(dir)
                 else:
                     for content in contents:
                         content_path = os.path.join(testdir,content)
                         reference_content_path = os.path.join(reference_dir,content)
-                        if os.path.isfile(reference_content_path):
+                        if os.path.isdir(content_path):
+                            subfolders += 1                      # only files directly in the folder are compared
+                        elif os.path.isfile(reference_content_path):
                             if relaxed or ( os.path.getsize(content_path) == os.path.getsize(reference_content_path) and hashfile(content_path) == hashfile(reference_content_path)):
                                 if (not dryrun):
                                     os.remove(content_path)
                                     run_report.count('files deleted', 1)
                                     refresh_contents=True
+                                duplicates += 1
                                 info("Deleting " + content_path )
+                            else:
+                                kept_differs += 1
+                        else:
+                            kept_no_partner += 1
                 if (refresh_contents):
                     contents = os.listdir(testdir)
                     refresh_contents = False
@@ -6832,26 +7082,135 @@ def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
                         info("Removed empty directory " + testdir)
                     except OSError:
                         pass
+    # What was looked at, so a run that deleted nothing says why
+    if not names:
+        info("'%s' is empty: nothing to trash" % ORPHAN_DIR_NAME)
+        return
+    verb = 'would be deleted' if dryrun else 'deleted'
+    info("trash: looked at %d folder%s in '%s'; %d duplicate file%s %s" % (looked_at, '' if looked_at == 1 else 's', ORPHAN_DIR_NAME,
+                                                                      duplicates, '' if duplicates == 1 else 's', verb))
+    something_left = False
+    if kept_no_partner:
+        info("   kept %d file%s: the game folder of the same name has no file of that name" % (kept_no_partner, '' if kept_no_partner == 1 else 's'))
+        something_left = True
+    if kept_differs:
+        info("   kept %d file%s: size or content differs from the game file of the same name" % (kept_differs, '' if kept_differs == 1 else 's'))
+        something_left = True
+    if kept_folders:
+        info("   kept %d folder%s without a game folder of that name (not looked into): %s%s" % (
+            len(kept_folders), '' if len(kept_folders) == 1 else 's', ', '.join(kept_folders[:5]), ', ...' if len(kept_folders) > 5 else ''))
+        something_left = True
+    if subfolders:
+        info("   not looked at: %d subfolder%s inside these folders (only files directly in a folder are compared)" % (subfolders, '' if subfolders == 1 else 's'))
+        something_left = True
+    if loose_files:
+        info("   not looked at: %d loose file%s directly in '%s' (only folders are looked at)" % (len(loose_files), '' if len(loose_files) == 1 else 's', ORPHAN_DIR_NAME))
+        something_left = True
+    if something_left:
+        info("   to delete everything in '%s' for good, use: clean -trash -all" % ORPHAN_DIR_NAME)
+
+
+def cmd_trash_all(cleandir, dryrun, assume_yes):
+    """Deletes EVERYTHING in !orphaned (loose files, folders, subfolders); the folder !orphaned itself stays. Shows what will go and
+    asks first when a person is there to ask; without a terminal it refuses unless assume_yes (-yes) says the deletion is meant."""
+    orphaned_root_dir = os.path.join(cleandir, ORPHAN_DIR_NAME)
+    if not os.path.isdir(orphaned_root_dir):
+        info("there is no '%s' folder in '%s': nothing to trash" % (ORPHAN_DIR_NAME, cleandir))
+        return
+    names = sorted(os.listdir(orphaned_root_dir))
+    if not names:
+        info("'%s' is empty: nothing to trash" % ORPHAN_DIR_NAME)
+        return
+    entries, total_files, total_size = [], 0, 0
+    for name in names:
+        files, size = tree_size(os.path.join(orphaned_root_dir, name))
+        entries.append((name, files, size))
+        total_files += files
+        total_size += size
+    info("'%s' holds %d item%s: %d file%s, %s" % (ORPHAN_DIR_NAME, len(entries), '' if len(entries) == 1 else 's',
+                                               total_files, '' if total_files == 1 else 's', pretty_size(total_size)))
+    listing_budget = [TRASH_LIST_TOTAL]
+    listed = entries if dryrun else entries[:TRASH_ALL_LISTED_ENTRIES]          # a dry run is the place to look at everything
+    for name, files, size in listed:
+        entry_path = os.path.join(orphaned_root_dir, name)
+        is_folder = os.path.isdir(entry_path) and not os.path.islink(entry_path)
+        info("   %s%s   %d file%s, %s" % (name, os.sep if is_folder else '', files, '' if files == 1 else 's', pretty_size(size)))
+        if is_folder:
+            for line in folder_contents_lines(entry_path, dryrun, listing_budget):
+                info(line)
+    if len(listed) < len(entries):
+        info("   ... and %d more item%s (-dryrun lists everything)" % (len(entries) - len(listed), '' if len(entries) - len(listed) == 1 else 's'))
+    if dryrun:
+        info("dry run: nothing was deleted")
+        return
+    if not assume_yes:
+        if sys.stdin is None or not sys.stdin.isatty():
+            error("-all deletes everything in '%s' for good and asks first, but there is no terminal to ask on. Nothing was deleted. "
+                  "Run it from a terminal, or add -yes if the deletion is meant to run unattended." % ORPHAN_DIR_NAME)
+            run_report.fail(orphaned_root_dir, 'not deleted: no terminal to ask for confirmation (add -yes for unattended runs)')
+            return
+        if not ask_yes_no("Delete all %d item%s (%s) from '%s' for good?" % (len(entries), '' if len(entries) == 1 else 's',
+                                                                           pretty_size(total_size), ORPHAN_DIR_NAME)):
+            info("cancelled: nothing was deleted")
+            return
+        info("confirmed: deleting everything in '%s'" % ORPHAN_DIR_NAME)
+    else:
+        info("-yes given: deleting everything in '%s' without asking" % ORPHAN_DIR_NAME)
+    for name, files, size in entries:
+        path = os.path.join(orphaned_root_dir, name)
+        try:
+            if os.path.islink(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    os.rmdir(path)                        # a link to a folder on Windows
+                run_report.count('orphaned links deleted')
+            elif os.path.isdir(path):
+                rmtree_force(path)
+                run_report.count('orphaned folders deleted', 1, size)
+            else:
+                try:
+                    os.remove(path)
+                except PermissionError:
+                    os.chmod(path, stat.S_IRWXU)          # a read-only file
+                    os.remove(path)
+                run_report.count('orphaned files deleted', 1, size)
+            info("Deleting " + path)
+        except Exception as e:
+            error("Failed to delete: " + path)
+            run_report.fail(path, 'could not be deleted: ' + str(e))
 
 
 def cmd_clear_partial_downloads(cleandir,dryrun):
-    """Deletes the unfinished downloads: the game folders in !downloading, except !provisional (see cmd_clear_provisional)."""
+    """Deletes the unfinished downloads: the game folders in !downloading, except !provisional (see cmd_clear_provisional).
+    Says what it found, so a run that deleted nothing says why."""
     downloading_root_dir = os.path.join(cleandir, DOWNLOADING_DIR_NAME)
     if not os.path.isdir(downloading_root_dir):
         info("there is no '%s' folder in '%s': no partial downloads to delete" % (DOWNLOADING_DIR_NAME, cleandir))
         return
-    for dir in sorted(os.listdir(downloading_root_dir)):
-        if dir != PROVISIONAL_DIR_NAME:
-            testdir= os.path.join(downloading_root_dir,dir)
-            if os.path.isdir(testdir):
-                try:
-                    if (not dryrun):
-                        shutil.rmtree(testdir)
-                        run_report.count('partial download folders deleted')
-                    info("Deleting " + testdir)
-                except Exception as e:
-                    error("Failed to delete directory: " + testdir)
-                    run_report.fail(testdir, 'could not be deleted: ' + str(e))
+    names = [name for name in sorted(os.listdir(downloading_root_dir)) if name != PROVISIONAL_DIR_NAME]
+    folders = [name for name in names if os.path.isdir(os.path.join(downloading_root_dir, name))]
+    loose_files = [name for name in names if name not in folders]
+    deleted = 0
+    for dir in folders:
+        testdir= os.path.join(downloading_root_dir,dir)
+        try:
+            if (not dryrun):
+                rmtree_force(testdir)
+                run_report.count('partial download folders deleted')
+            deleted += 1
+            info("Deleting " + testdir)
+        except Exception as e:
+            error("Failed to delete directory: " + testdir)
+            run_report.fail(testdir, 'could not be deleted: ' + str(e))
+    if folders:
+        info("partials: %d unfinished download folder%s %s" % (deleted, '' if deleted == 1 else 's', 'would be deleted' if dryrun else 'deleted'))
+    else:
+        info("partials: no unfinished downloads. '%s' has no game folders (an unfinished download is a folder %s with the file in it)"
+             % (DOWNLOADING_DIR_NAME, os.path.join(DOWNLOADING_DIR_NAME, '<game>')))
+    if loose_files:
+        info("   not touched: %d loose file%s directly in '%s' (only game folders count as unfinished downloads)"
+             % (len(loose_files), '' if len(loose_files) == 1 else 's', DOWNLOADING_DIR_NAME))
 
 
 def cmd_clear_provisional(cleandir,dryrun):
@@ -6861,22 +7220,29 @@ def cmd_clear_provisional(cleandir,dryrun):
     if not os.path.isdir(provisional_root_dir):
         info("there is no '%s' folder in '%s': no finished files are waiting there" % (os.path.join(DOWNLOADING_DIR_NAME, PROVISIONAL_DIR_NAME), cleandir))
         return
-    for name in sorted(os.listdir(provisional_root_dir)):
+    names = sorted(os.listdir(provisional_root_dir))
+    deleted = 0
+    for name in names:
         path = os.path.join(provisional_root_dir, name)
         try:
             if os.path.isdir(path) and not os.path.islink(path):
                 if (not dryrun):
-                    shutil.rmtree(path)
+                    rmtree_force(path)
                     run_report.count('provisional folders deleted')
             else:
                 size = os.path.getsize(path) if os.path.isfile(path) else 0
                 if (not dryrun):
                     os.remove(path)
                     run_report.count('provisional files deleted', 1, size)
+            deleted += 1
             info("Deleting " + path)
         except Exception as e:
             error("Failed to delete: " + path)
             run_report.fail(path, 'could not be deleted: ' + str(e))
+    if names:
+        info("provisional: %d item%s %s" % (deleted, '' if deleted == 1 else 's', 'would be deleted' if dryrun else 'deleted'))
+    else:
+        info("provisional: nothing is waiting in '%s'" % os.path.join(DOWNLOADING_DIR_NAME, PROVISIONAL_DIR_NAME))
 
 
 def cmd_clean(cleandir, dryrun, items=None):
@@ -7002,6 +7368,14 @@ def clean_option_problem(args):
     refinements = [name for name in ('installers', 'images', 'folders', 'relaxed') if getattr(args, name, False)]
     if refinements and not args.trash:
         return '%s can only be used together with -trash' % ', '.join('-' + name for name in refinements)
+    if getattr(args, 'all', False):
+        if not args.trash:
+            return '-all can only be used together with -trash'
+        if refinements:
+            return ('-all deletes everything in \'%s\', so %s would add nothing and cannot be combined with it' %
+                    (ORPHAN_DIR_NAME, ', '.join('-' + name for name in refinements)))
+    if getattr(args, 'yes', False) and not getattr(args, 'all', False):
+        return '-yes can only be used together with -trash -all'
     return None
 
 
@@ -7062,7 +7436,7 @@ def clean_target_problem(cleandir, items):
             % (full, getattr(found, 'folder_name', None) or found.title, why, ORPHAN_DIR_NAME, os.path.dirname(full)))
 
 
-def cmd_clean_stages(gamedir, orphans, partials, provisional, trash, installers, images, folders, relaxed, dryrun):
+def cmd_clean_stages(gamedir, orphans, partials, provisional, trash, installers, images, folders, relaxed, dryrun, trash_all=False, yes=False):
     """`clean`: the stages that were asked for, in this order: unfinished downloads (-partials), finished files waiting in
     !provisional (-provisional), moving unknown files to !orphaned (-orphans), deleting from !orphaned (-trash). Without any stage
     only the move to !orphaned runs, as clean always did. Only that stage needs the manifest."""
@@ -7095,7 +7469,10 @@ def cmd_clean_stages(gamedir, orphans, partials, provisional, trash, installers,
         cmd_clean(gamedir, dryrun, items)
     if trash:
         info("clean: deleting from '%s' for good" % ORPHAN_DIR_NAME)
-        cmd_trash(gamedir, installers, images, folders, relaxed, dryrun)
+        if trash_all:
+            cmd_trash_all(gamedir, dryrun, yes)
+        else:
+            cmd_trash(gamedir, installers, images, folders, relaxed, dryrun)
 
 
 class SelfUpdateError(Exception):
@@ -7326,7 +7703,7 @@ def main(args):
         warn("the command clear_partial_downloads is deprecated and will be removed; use: clean -partials")
         cmd_clear_partial_downloads(args.gamedir,args.dryrun)
     elif args.command == 'clean':
-        cmd_clean_stages(args.gamedir, args.orphans, args.partials, args.provisional, args.trash, args.installers, args.images, args.folders, args.relaxed, args.dryrun)
+        cmd_clean_stages(args.gamedir, args.orphans, args.partials, args.provisional, args.trash, args.installers, args.images, args.folders, args.relaxed, args.dryrun, args.all, args.yes)
     elif args.command == 'list':
         cmd_list(args.words, args.os, args.skipos, args.lang, args.skiplang, args.format)
     elif args.command == 'export':
@@ -7548,6 +7925,9 @@ if __name__ == "__main__":
     except TokenPasswordError as e:
         error('%s' % e)         # no traceback: it is not a program error
         error("If you have forgotten the password, delete %s and run the login command again." % TOKEN_FILENAME)
+        sys.exit(1)
+    except TokenModuleMissing as e:
+        error('%s' % e)         # no traceback: the message says what to install
         sys.exit(1)
     except Exception:
         log_exception('fatal...')
