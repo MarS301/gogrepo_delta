@@ -16,6 +16,7 @@ The tests run inside a scratch folder that is removed afterwards (`_bootstrap.py
 | test_unicode | Chinese, Japanese, Russian, emoji ... in the manifest, export, log file, file names, !info.txt and redirected console output |
 | test_hashing | hashfile (MD5 of a file, closes the file) |
 | test_moves | move_with_increment_on_clash on real temporary folders |
+| test_game_renames | manifest persistence after renames, size/MD5 destination checks, file rename cycles, failed moves and dry runs |
 | test_language_fallback | English fallback for the default language in update (incl. resume), download, verify, import and backup |
 | test_defaults | default OS / language detection, fallbacks, and -os / -lang / -skipos / -skiplang for update, download, verify, import, backup |
 | test_run_summary | the end-of-run summary and exit status of every command, the entry point, and the real script's exit codes; also that 'files downloaded' counts only data really transferred and checked files have their own line |

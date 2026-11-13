@@ -32,6 +32,25 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.62 - 13.11.2026 - Rename state is saved; circular file renames are staged safely
+
+- **A successful rename is now committed to the manifest immediately.** `handle_game_renames()` reports whether it changed rename state, and `download`, `verify` and `clean` save the manifest when needed. `download` saves the complete manifest, not only the selected games. This prevents a successful on-disk rename from being forgotten and attempted again on the next run.
+- **File rename cycles are handled as a group.** Pending source files are first moved into a temporary staging directory, then placed at their destinations. This safely handles swaps such as `A -> B` and `B -> A` without orphaning one of the cycle's source files as a false destination clash. Ambiguous duplicate paths are skipped rather than guessed.
+- **An already-correct destination is recognized by both size and MD5.** When both match the manifest, the stale `old_name` marker is cleared without replacing the valid destination. Missing size or MD5 is never treated as a match.
+- **Failed renames remain retryable.** `old_name` / `old_folder_name` are cleared only after success (or after a destination has been positively verified); failed file renames invalidate `prev_verified` and cause that state to be saved. A dry run no longer creates `!orphaned` or a temporary staging directory.
+- `tests/test_game_renames.py`: 10 regression tests for ordinary and folder renames, already-correct destinations, two-file circular renames, failed staging, dry runs, and saving the complete manifest.
+
+DIFFERENCE: rename handling is safer and persists its state. Circular file renames are staged before destination changes; ambiguous duplicate source/destination mappings are left pending. Directory rename cycles are not specially staged and remain subject to the existing destination-orphaning behavior.
+
+## 0.5.61 - 13.11.2026 - Cleanup keeps files when manifest metadata is incomplete
+
+- **`clean` no longer orphans unrecognized files from a game folder if any download, Galaxy download, shared download, or released extra has no filename.** A missing filename can mean that GOG file metadata could not be fetched; it is not proof that a local installer or extra is obsolete. The known filenames are still recognised, and normal orphaning still happens when all filenames are known.
+- **The `!downloading` cleanup follows the same rule.** It leaves unrecognized files in the affected game's work folder when any downloadable manifest item has an unknown filename, rather than deleting a partial download that may belong to that item. With complete filenames, obsolete work files are still removed as before.
+- **MD5 XML cleanup now protects incomplete OS and language metadata as well as unknown filenames.** If any download has no OS, the existing OS directories and their contents are retained. If an entry for a known OS has no language, that OS's existing language directories and contents are retained. The XML writer skips entries without an OS or language because it has no safe destination for their XML; existing cached data is left alone.
+- `tests/test_cleanup_incomplete_metadata.py`: 7 regression tests (unknown names in `clean` and `!downloading`, plus normal cleanup when metadata is complete). `tests/test_md5_cleanup.py`: 3 new tests for unknown OS/language metadata and a successful manifest save.
+
+DIFFERENCE: cleanup is deliberately less aggressive when metadata is incomplete. Some genuinely obsolete files may remain until a later update provides complete filenames, OS and language information; this is preferable to moving or deleting valid user data based on missing metadata.
+
 ## 0.5.60 - 11.11.2026 - CSV export: update date and update time (UTC) in two columns; clearer text for refused prices
 
 - **`export`: the `updated` column is now two columns, `update date` and `update time (UTC)`.** One cell with `2026-06-23T18:59:00+02:00` is text to a spreadsheet; two cells with `2026-06-23` and `16:59:00` are a date and a time that Excel and the like show in the format of the user's language. The stamp is converted to UTC (an offset moves the time and, over midnight, the date: `00:30+05:30` becomes the previous day, `19:00:00`); a stamp without a zone is taken as UTC, which is how the program stores GOG's stamps; something that is not a stamp (a year, an old value) goes into the date column unchanged with an empty time, and a file without a stamp gets two empty cells. The `on disk` column from `--savedir` is still the last one, so every column after `md5` moved one place to the right.
