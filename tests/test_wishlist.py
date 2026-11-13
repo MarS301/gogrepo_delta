@@ -34,6 +34,7 @@ class FakeGog(object):
         self.prices = {}            # id -> prices answer
         self.raw_wishlist = None    # a text to send instead of the wishlist JSON
         self.bad_countries = set()  # countryCode values that get 400 Bad Request, like GOG does for UK
+        self.bad_products = set()   # product ids whose price request gets 400, whatever the country
         self.requests = []
 
     def start(self):
@@ -63,6 +64,8 @@ class FakeGog(object):
                     return self.send(200, outer.products[parts[1]])
                 if len(parts) == 3 and parts[0] == 'products' and parts[2] == 'prices' and any('countryCode=' + c in self.path for c in outer.bad_countries):
                     return self.send(400, {'error': 'bad country'})
+                if len(parts) == 3 and parts[0] == 'products' and parts[2] == 'prices' and parts[1] in outer.bad_products:
+                    return self.send(400, {'error': 'bad product'})
                 if len(parts) == 3 and parts[0] == 'products' and parts[2] == 'prices' and parts[1] in outer.prices:
                     return self.send(200, outer.prices[parts[1]])
                 self.send(404, {'error': 'not found'})
@@ -370,15 +373,104 @@ class CountryAndEmptyListTests(WishlistBase):
         self.assertEqual('2020-01-02', self.read('uk.csv')[1][2])
         self.assertEqual([], g.run_report.failures)
 
-    def test_a_country_gog_refuses_stops_the_price_requests_after_the_first(self):
+    def test_a_country_gog_refuses_stops_the_price_requests_after_the_first_three(self):
         self.gog.bad_countries = {'XX'}
         started = time.time()
         g.cmd_wishlist(prices=True, country='XX')
         self.assertLess(time.time() - started, 4, 'no retries for a 400')
-        self.assertEqual(1, self.gog.count('/prices'))
+        self.assertEqual(3, self.gog.count('/prices'))
         self.assertEqual([('prices', 'country not accepted')], g.run_report.failures)
-        self.assertTrue(any('two-letter ISO code' in m for m in self.log.messages('ERROR')))
+        self.assertTrue(any('two-letter ISO code' in m and 'first 3 games' in m for m in self.log.messages('ERROR')))
         self.assertEqual({'111', '222', '333'}, set(self.saved()['games']), 'the wishlist itself is still saved')
+
+    def many_games(self, count):
+        """A wishlist of `count` games that all have a price."""
+        self.gog.wishlist = {}
+        for number in range(count):
+            game_id = str(1000 + number)
+            self.gog.wishlist[game_id] = True
+            self.gog.product(game_id, 'Game %02d' % number)
+            self.gog.prices[game_id] = PRICES_ANSWER
+        return [str(1000 + number) for number in range(count)]
+
+    def test_games_that_gog_refuses_after_some_prices_do_not_stop_the_others(self):
+        # the report: the prices of 15 games came, then GOG answered 400 for the 16th and the country was blamed for all the rest
+        ids = self.many_games(20)
+        self.gog.bad_products = {ids[15], ids[17]}
+        g.cmd_wishlist(prices=True, country='DE')
+        saved = self.saved()
+        self.assertEqual(20, len(saved['games']))
+        self.assertEqual(18, len([i for i in ids if saved['games'][i].get('price')]), 'every other game has its price')
+        self.assertEqual(20, self.gog.count('/prices'), 'no request was skipped')
+        self.assertFalse(any('two-letter ISO code' in m for m in self.log.messages()), 'the country is not blamed')
+        self.assertEqual([], g.run_report.failures)
+        self.assertEqual([2, 0], g.run_report.counts['prices refused by GOG'])
+
+    def test_each_refused_game_is_named_with_the_words_of_gog(self):
+        ids = self.many_games(5)
+        self.gog.bad_products = {ids[3]}
+        g.cmd_wishlist(prices=True, country='DE')
+        warnings = self.log.messages('WARNING')
+        self.assertTrue(any('GOG refused the price request for Game 03: "' in m and 'bad product' in m and '"; its price is not known' in m for m in warnings), warnings)
+        self.assertEqual(1, len([m for m in warnings if 'GOG refused' in m]))
+
+    def test_a_refused_game_keeps_the_price_that_was_known(self):
+        ids = self.many_games(4)
+        g.cmd_wishlist(prices=True, country='DE')
+        known = self.saved()['games'][ids[3]]['price']
+        self.assertTrue(known)
+        self.gog.bad_products = {ids[3]}
+        g.run_report.reset('wishlist')
+        g.cmd_wishlist(prices=True, country='DE')
+        self.assertEqual(known, self.saved()['games'][ids[3]]['price'])
+        self.assertFalse(any('price changed' in m or 'cheaper' in m or 'dearer' in m for m in self.log.messages()))
+
+    def test_a_game_without_prices_counts_as_an_answer_for_the_country(self):
+        # 404 (no prices for this game) is an answer too: three refusals after it are not a country problem
+        ids = self.many_games(5)
+        del self.gog.prices[ids[0]]
+        self.gog.bad_products = {ids[1], ids[2], ids[3]}
+        g.cmd_wishlist(prices=True, country='DE')
+        self.assertEqual(5, self.gog.count('/prices'))
+        self.assertEqual([], g.run_report.failures)
+        self.assertFalse(any('two-letter ISO code' in m for m in self.log.messages()))
+
+    def test_a_country_error_needs_three_refusals_with_no_answer_before(self):
+        ids = self.many_games(8)
+        self.gog.bad_products = set(ids[:2])           # two refusals, then answers: not enough for the country error
+        g.cmd_wishlist(prices=True, country='DE')
+        self.assertEqual(8, self.gog.count('/prices'))
+        self.assertEqual([], g.run_report.failures)
+
+    def test_refusals_for_every_one_of_fewer_than_three_games_are_reported_as_a_failure(self):
+        self.gog.wishlist = {'111': True, '222': True}
+        self.gog.bad_countries = {'XX'}
+        g.cmd_wishlist(prices=True, country='XX')
+        self.assertEqual(2, self.gog.count('/prices'))
+        self.assertEqual([('prices', 'refused for every game')], g.run_report.failures)
+        self.assertTrue(any("GOG refused every price request" in m and "'XX'" in m and '-country' in m for m in self.log.messages('WARNING')))
+
+    def test_the_refusal_text_cannot_carry_escape_sequences_or_a_long_text_to_the_console(self):
+        response = requests.Response()
+        response.status_code = 400
+        response._content = ('\x1b[2J\x1b[31mevil\nline2 ' + 'x' * 900).encode('utf-8')
+        error = requests.HTTPError('400', response=response)
+        with mock.patch.object(g, 'request', side_effect=error):
+            with self.assertRaises(g.PriceRefused) as caught:
+                g.fetch_wishlist_price(fake_session(), '1', 'DE')
+        self.assertNotIn('\x1b', caught.exception.text)
+        self.assertNotIn('\n', caught.exception.text)
+        self.assertLessEqual(len(caught.exception.text), 120)
+        self.assertIn('evil line2', caught.exception.text)
+
+    def test_a_refusal_without_a_text_still_says_what_it_was(self):
+        response = requests.Response()
+        response.status_code = 400
+        response._content = b''
+        with mock.patch.object(g, 'request', side_effect=requests.HTTPError('400', response=response)):
+            with self.assertRaises(g.PriceRefused) as caught:
+                g.fetch_wishlist_price(fake_session(), '1', 'DE')
+        self.assertEqual('HTTP 400', caught.exception.text)
 
     def test_a_400_is_not_retried_when_the_caller_says_so(self):
         self.gog.bad_countries = {'XX'}

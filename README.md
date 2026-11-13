@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.55-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.60-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -24,9 +24,14 @@ library and helps you maintain a dependable, verifiable local collection.
 
 > [!WARNING]
 > **New token storage.** New logins save credentials in `gog-token.json`, encrypted by default with a
-> password you choose. Encrypted mode requires the third-party `cryptography` package
-> (`python -m pip install cryptography`). The password is requested once per process and is never stored.
+> password you choose. Encrypted mode uses the third-party `cryptography` package
+> (`python -m pip install cryptography`; the binaries contain it). The password is requested once per process and is never stored.
 >
+> - **`cryptography` not installed:** the program saves the token as readable JSON with **no encryption** and
+>   prints a warning (once per run) that names the package to install. It never replaces an existing encrypted
+>   `gog-token.json` (or one it cannot read) by a plain-text file: it stops with a message instead. If you set
+>   `GOGREPO_TOKEN_MODE=encrypted` yourself it does not fall back either, it stops. After you install the
+>   package, the next save of a plain-text token asks you to create a password and encrypts the file.
 > - **Unattended machines:** set `GOGREPO_TOKEN_MODE=plain` explicitly. This stores the token as readable
 >   JSON and provides **no encryption**.
 > - **Existing `gog-token.dat` files** are read only when `gog-token.json` is absent. Their contents are
@@ -39,7 +44,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.55` |
+| **Current version** | `v0.5.60` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -49,6 +54,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 - [Features](#features)
 - [Requirements and installation](#requirements-and-installation)
+  - [Binaries (no Python needed)](#binaries-no-python-needed)
   - [Required dependencies](#required-dependencies)
   - [Optional dependencies](#optional-dependencies)
   - [Verifying a download](#verifying-a-download)
@@ -106,18 +112,30 @@ library and helps you maintain a dependable, verifiable local collection.
 
 ## Requirements and installation
 
+### Binaries (no Python needed)
+
+The ready-made binaries on the [Releases page](https://github.com/MarS301/gogrepo_delta/releases) are for people who do not want to install Python and the packages listed below. Each one is a single program file that already contains Python and all dependencies, the optional ones included (`cryptography`, `html2text`, `blake3` and, on macOS, PyObjC). There is one archive per platform: Windows x64 (`.zip`), Linux x64 and arm64 and macOS Intel (x64) and Apple Silicon (arm64) (all `.tar.gz`). Unpack it and run `gogrepo_delta` (`gogrepo_delta.exe` on Windows) wherever this README says `python gogrepo_delta.py`, for example `gogrepo_delta --help`; the commands and options are the same.
+
+The binaries are not code-signed, so your operating system may show a warning the first time you start one. [Verify the download](#verifying-a-download) before you run it. If you prefer to run `gogrepo_delta.py` with Python, or want to read or change the code, follow the rest of this section.
+
 ### Required dependencies
 
 - Python **3.10 or newer** (3.8 / 3.9: starts with a warning, best effort, not covered by the tests)
 - `html5lib`
 - `requests`
 - `psutil`
-- `cryptography` (for the default encrypted token storage; not needed with `GOGREPO_TOKEN_MODE=plain`)
+- **macOS only:** `pyobjc-framework-Cocoa` (PyObjC; it provides CoreFoundation, which the program uses to keep the Mac awake during long runs). Install it on every Mac that runs the program. If it is missing the program still starts, but it prints one warning and does not keep the computer awake, so a long `update` or `download` can be interrupted by sleep.
 
-Install the required packages:
+Install the required packages, plus `cryptography`, which is optional but strongly recommended (see below):
 
 ```bash
 python -m pip install html5lib requests psutil cryptography
+```
+
+On macOS also install:
+
+```bash
+python -m pip install pyobjc-framework-Cocoa
 ```
 
 Download `gogrepo_delta.py` into a working directory and run it with Python:
@@ -129,6 +147,12 @@ python gogrepo_delta.py --help
 The script must be started with a Python interpreter; do not execute it as a shell script.
 
 ### Optional dependencies
+
+- `cryptography`: **strongly recommended.** It encrypts the saved login token (`gog-token.json`) with a password you choose. Without it the program still works, but it saves the token as readable plain text and says so in a warning (once per run). It is not needed with `GOGREPO_TOKEN_MODE=plain`.
+
+  ```bash
+  python -m pip install cryptography
+  ```
 
 - `html2text` (2015.6.21 or newer): converts downloaded GOG changelogs from HTML to readable text.
 
@@ -143,7 +167,6 @@ The script must be started with a Python interpreter; do not execute it as a she
   ```
 
 - **Linux/Unix:** PyQt5 with QtDBus support can be used for desktop-session sleep inhibition where supported.
-- **macOS:** PyObjC components, including CoreFoundation support, are used for macOS-specific power-management functionality.
 - **Windows:** required Windows API calls use Python's built-in `ctypes` module.
 
 ### Verifying a download
@@ -175,7 +198,7 @@ Run the commands below from the directory in which you want the program's workin
 python gogrepo_delta.py login
 ```
 
-Enter your GOG username/email when prompted. If the password is not supplied as an argument, it is requested securely. You will then be asked to create a password that protects the saved token (see the notice above).
+Enter your GOG username/email when prompted. If the password is not supplied as an argument, it is requested securely. If the `cryptography` package is installed you will then be asked to create a password that protects the saved token; without it the token is saved as plain text (see the notice above).
 
 If automatic login is blocked by a CAPTCHA or a changed GOG login page, use browser login:
 
@@ -393,7 +416,7 @@ python gogrepo_delta.py export --output my-library.csv
 python gogrepo_delta.py export --savedir "/path/to/GOG games"
 ```
 
-Exports one CSV row per manifest file. The spreadsheet includes game ID/title, folder, file type, filename, OS, language, version, size, MD5, and update information. `--savedir DIR` adds an on-disk status column.
+Exports one CSV row per manifest file. The spreadsheet includes game ID/title, folder, file type, filename, OS, language, version, size, MD5, and the update date and the update time (UTC) in two columns, so that Excel and other spreadsheet programs show them in the format of your computer's language (the cells hold `2026-06-23` and `16:59:00`, forms every spreadsheet understands). `--savedir DIR` adds an on-disk status column.
 
 - `--output FILE`: output path (default: `gog-library.csv`).
 - `--delimiter CHAR`: set the CSV separator. By default, the separator is selected for common spreadsheet locale conventions.
@@ -414,7 +437,7 @@ Saves the games on your GOG wishlist to `gog-wishlist.json` and says what change
 The title, release date and store link of a game are fetched once and kept in the file, so later runs only ask GOG about new games. Requires `login` (the wishlist belongs to your account).
 
 - `--prices`: also fetch the price of every game (one more request per game). Games without a price in the store (delisted, unreleased, not sold in that country) simply have none.
-- `--country CODE`: the two-letter country the prices are for, like `DE`, `GB` or `US` (default: `US`). `UK` is taken as `GB`; a country GOG does not accept for prices is reported once and stops the price requests.
+- `--country CODE`: the two-letter country the prices are for, like `DE`, `GB` or `US` (default: `US`). `UK` is taken as `GB`. If GOG refuses (HTTP 400) the price of a single game, that game is named in a warning with GOG's own message (for example `Product 1293804420 not found`), keeps the price that was known, and the other games go on; the run still ends normally. Only when GOG refuses the first three price requests and has answered none, the country is blamed (one error, and the price requests stop); if it refuses every request of a wishlist with fewer than three games, you get a warning and exit status 1.
 - `--currency CODE`: GOG gives one price per currency for a country (for example EUR and USD for `DE`); by default the first one is used.
 - `--output FILE`: where to save the wishlist and what the next run compares with (default: `gog-wishlist.json`).
 - `--csv [FILE]`: also write a spreadsheet (without a file name: `gog-wishlist.csv`) with title, release date (always as `2026-11-05`), store link, "in library", regular price, price, discount and promotion. `--delimiter CHAR` works as for `export`; with `;` the prices use decimal commas. The date is ISO on purpose: a spreadsheet reads a date in the order of your computer's language (`11/05/2026` becomes 11 May on a German Excel, and `06/23/2026` stays text), while `2026-11-05` is understood everywhere and then shown the local way.
@@ -443,6 +466,18 @@ Options for `--trash` (they are refused without it):
 - `--folders`: also delete orphaned game folders when a corresponding game folder exists.
 - `--images`: also delete orphaned `!images` directories when a corresponding images directory exists.
 - `--relaxed`: relax duplicate checks and deletion requirements; use with care.
+
+`--trash --all` deletes **everything** in `!orphaned`: loose files, folders and subfolders, duplicates or not (the `!orphaned` folder itself stays). It cannot be combined with `--installers`, `--images`, `--folders` or `--relaxed`, which it makes unnecessary. Before it deletes anything it lists what it found: the number of items and files, the total size, and each top-level item with its size (the first 20), and under each folder what is inside it: files with their size, subfolders as `name\ (N files, size)`, at most 20 entries per folder and 200 lines in all (the rest is counted: `... and N more items`). Then:
+
+- **At a terminal** it asks `Delete all N items (size) from '!orphaned' for good? [y/N]`. Only `y`, `yes`, `j` or `ja` (any case) go ahead; Enter, any other answer and a closed input mean no, and nothing is deleted.
+- **Without a terminal** (a scheduled task, a pipe) there is nobody to ask, so it refuses with an error and exit status 1 and deletes nothing, unless you add `--yes`. `--yes` skips the question and can only be used together with `--trash --all`. Use it on the command line of the unattended job; leave it out of the config file if you also run the program by hand.
+- **With `--dryrun`** it shows the full list, without any limit: every top-level item and every file below each folder with its path and size (empty folders as `(empty)`). It never asks and deletes nothing. The output can be long (a `.git` folder has thousands of files); redirect it to a file if you want to read it in peace.
+
+The same listing is printed when `--folders` or `--images` delete a whole folder: the line `Deleting <folder>` is followed by what was in it (in a dry run all of it, otherwise capped as above).
+
+Read-only files and folders (Git, for example, makes its objects read-only, and Windows refuses to delete such files) no longer stop a deletion; this applies to `--partials`, `--provisional` and all of `--trash`.
+
+Every stage says what it looked at, so a run that deleted nothing says why: `--partials` names the number of unfinished downloads it found or tells you that `!downloading` has no game folders (loose files directly in it are mentioned as not touched); `--provisional` says how many items it deleted or that nothing is waiting; plain `--trash` reports how many folders it looked at, how many duplicates it deleted and what it kept (files without a same-named partner in the game folder, files whose size or content differs, folders without a game folder of that name, subfolders and loose files it does not look at) and points to `--all`. The messages of a dry run say "would be deleted".
 
 Give `clean` the library folder, the one that contains all the game folders, not the folder of one game. If the folder you give looks like a single game's folder (its name is a game folder of the manifest, or it holds an installer or extra of a game and no game folders), `clean` stops with a message before it changes anything and tells you which folder to use. `clean` also stops if there is no manifest that lists games: the manifest `gog-manifest.dat` is read from the current folder, so run `clean` from the folder that holds it (or run `update` first). Both checks are part of the `--orphans` stage, which is the only one that reads the manifest.
 
@@ -562,7 +597,7 @@ The program keeps its state files in the current working directory (unless confi
 | File | Purpose |
 | --- | --- |
 | `gogrepo_delta.cfg` | Configuration and command defaults. |
-| `gog-token.json` | Saved GOG authentication token (encrypted by default). Treat it as a credential. |
+| `gog-token.json` | Saved GOG authentication token (encrypted by default; plain text if the `cryptography` package is missing or `GOGREPO_TOKEN_MODE=plain`). Treat it as a credential. |
 | `gog-token.dat` | Legacy token file from older versions. Read-only; never modified or deleted. |
 | `gog-manifest.dat` | Main library manifest (JSON by default). |
 | `gog-manifest.dat.bak` | Previous manifest version. |

@@ -310,7 +310,7 @@ class ExportTests(TempDirTests):
         with open('lib/game_0/manual.pdf', 'wb') as f:
             f.write(b'x')                                  # wrong size
         g.cmd_export('gog-library.csv', 'lib', ',')
-        rows = {(r[1], r[4]): r[12] for r in self.rows()[1:]}
+        rows = {(r[1], r[4]): r[13] for r in self.rows()[1:]}          # after the update date and the update time
         self.assertEqual(rows[('game_0', 'setup_0.exe')], 'yes')
         self.assertEqual(rows[('game_0', 'manual.pdf')], 'wrong size')
         self.assertEqual(rows[('game_1', 'setup_1.exe')], 'no')
