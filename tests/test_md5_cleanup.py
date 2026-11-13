@@ -71,6 +71,26 @@ class Md5CleanupTests(unittest.TestCase):
         self._save([download])
         self.assertTrue(os.path.isfile(expected))
 
+    def test_existing_os_directory_is_preserved_when_an_download_has_unknown_os(self):
+        existing = self._write("downloads/windows/en/valid.xml")
+        download = AttrDict(os_type=None, lang=None, name="unknown.exe",
+                            unreleased=False)
+        self._save([download])
+        self.assertTrue(os.path.isfile(existing))
+
+    def test_existing_language_directories_are_preserved_when_language_is_unknown(self):
+        existing = self._write("downloads/windows/fr/valid.xml")
+        download = AttrDict(os_type="windows", lang=None, name="unknown.exe",
+                            unreleased=False)
+        self._save([download])
+        self.assertTrue(os.path.isfile(existing))
+
+    def test_unknown_os_does_not_break_manifest_save(self):
+        download = AttrDict(os_type=None, lang=None, name="unknown.exe",
+                            unreleased=False)
+        self._save([download])
+        self.assertTrue(os.path.isfile("manifest.dat"))
+
 
 if __name__ == "__main__":
     unittest.main()

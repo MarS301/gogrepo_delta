@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.60'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.62'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -1197,57 +1197,67 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                                 else:
                                     cur_fulldir2 = os.path.join(MD5_DIR_NAME, cur_dir,cur_dir_file)
                                     if cur_dir_file == "downloads":
-                                        os_types = []
-                                        for game_item in all_items_by_title[cur_dir].downloads:
-                                            if game_item.os_type not in os_types:
-                                                os_types.append(game_item.os_type)
-                                        for cur_dir_file in os.listdir(cur_fulldir2):
-                                            if os.path.isdir(os.path.join(cur_fulldir2,cur_dir_file)):
-                                                if cur_dir_file not in os_types:
-                                                    info("Removing incorrect subdirectory " + os.path.join(cur_fulldir2,cur_dir_file))
-                                                    shutil.rmtree(os.path.join(cur_fulldir2, cur_dir_file))
-                                                else:
-                                                    cur_fulldir3 = os.path.join(cur_fulldir2,cur_dir_file)
-                                                    os_game_items = [x for x in all_items_by_title[cur_dir].downloads if x.os_type == cur_dir_file]
-                                                    langs = []
-                                                    for game_item in os_game_items:
-                                                        if game_item.lang not in langs:
-                                                            langs.append(game_item.lang)
-                                                    for cur_dir_file in os.listdir(cur_fulldir3):
-                                                        if os.path.isdir(os.path.join(cur_fulldir3,cur_dir_file)):
-                                                            if cur_dir_file not in langs:
-                                                                info("Removing incorrect subdirectory " + os.path.join(cur_fulldir3,cur_dir_file))
-                                                                shutil.rmtree(os.path.join(cur_fulldir3, cur_dir_file))
-                                                            else:
-                                                                cur_fulldir4 = os.path.join(cur_fulldir3,cur_dir_file)
-                                                                lang_os_game_items = [x for x in os_game_items if x.lang == cur_dir_file]
-                                                                expected_filenames = []
-                                                                has_unknown_filename = False
-                                                                for game_item in lang_os_game_items:
-                                                                    if game_item.name is None:
-                                                                        has_unknown_filename = True
-                                                                        warn("Game item has OS and Lang but no name in game associated with " + cur_fulldir4)
-                                                                        if game_item.provisional_name:
-                                                                            warn("This was due to a failure to fetch file info: the provisional name of item was: " + game_item.provisional_name + " from " + game_item.manualUrl)
-                                                                    else:
-                                                                        expected_filenames.append(game_item.name + ".xml")
+                                        downloads = all_items_by_title[cur_dir].downloads
+                                        # An unknown OS or language can be the result of an incomplete GOG
+                                        # response. Absence from the current list is not proof that the
+                                        # corresponding MD5 directory is obsolete.
+                                        has_unknown_os = any(not game_item.os_type for game_item in downloads)
+                                        os_types = {game_item.os_type for game_item in downloads if game_item.os_type}
+                                        for os_entry in os.listdir(cur_fulldir2):
+                                            os_path = os.path.join(cur_fulldir2, os_entry)
+                                            if not os.path.isdir(os_path):
+                                                info("Removing invalid file " + os_path)
+                                                os.remove(os_path)
+                                                continue
+                                            if not has_unknown_os and os_entry not in os_types:
+                                                info("Removing incorrect subdirectory " + os_path)
+                                                shutil.rmtree(os_path)
+                                                continue
+                                            # If an OS is unknown, its MD5 data could be in any OS
+                                            # directory. Preserve the whole downloads tree rather than
+                                            # making guesses about which existing directory it belongs to.
+                                            if has_unknown_os:
+                                                continue
 
-                                                                # Missing names can mean GOG metadata fetch failed. Do not
-                                                                # interpret incomplete metadata as proof that existing hashes are stale.
-                                                                for entry_name in os.listdir(cur_fulldir4):
-                                                                    entry_path = os.path.join(cur_fulldir4, entry_name)
-                                                                    if os.path.isdir(entry_path):
-                                                                        info("Removing subdirectory(?!) " + entry_path)
-                                                                        shutil.rmtree(entry_path) # There shouldn't be subdirectories here.
-                                                                    elif not has_unknown_filename and entry_name not in expected_filenames:
-                                                                        info("Removing outdated file " + entry_path)
-                                                                        os.remove(entry_path)
-                                                        else:
-                                                            info("Removing invalid file " + os.path.join(cur_fulldir3, cur_dir_file))
-                                                            os.remove(os.path.join(cur_fulldir3, cur_dir_file))
-                                            else:
-                                                info("Removing invalid file " + os.path.join(cur_fulldir2, cur_dir_file))
-                                                os.remove(os.path.join(cur_fulldir2, cur_dir_file))
+                                            os_game_items = [x for x in downloads if x.os_type == os_entry]
+                                            has_unknown_lang = any(not game_item.lang for game_item in os_game_items)
+                                            langs = {game_item.lang for game_item in os_game_items if game_item.lang}
+                                            for lang_entry in os.listdir(os_path):
+                                                lang_path = os.path.join(os_path, lang_entry)
+                                                if not os.path.isdir(lang_path):
+                                                    info("Removing invalid file " + lang_path)
+                                                    os.remove(lang_path)
+                                                    continue
+                                                if not has_unknown_lang and lang_entry not in langs:
+                                                    info("Removing incorrect subdirectory " + lang_path)
+                                                    shutil.rmtree(lang_path)
+                                                    continue
+                                                # A missing language can belong to any existing language
+                                                # directory under this OS. Do not prune files or folders.
+                                                if has_unknown_lang:
+                                                    continue
+
+                                                lang_items = [x for x in os_game_items if x.lang == lang_entry]
+                                                expected_filenames = []
+                                                has_unknown_filename = False
+                                                for game_item in lang_items:
+                                                    if game_item.name is None:
+                                                        has_unknown_filename = True
+                                                        warn("Game item has OS and Lang but no name in game associated with " + lang_path)
+                                                        if game_item.provisional_name:
+                                                            warn("This was due to a failure to fetch file info: the provisional name of item was: " + game_item.provisional_name + " from " + game_item.manualUrl)
+                                                    else:
+                                                        expected_filenames.append(game_item.name + ".xml")
+
+                                                for entry_name in os.listdir(lang_path):
+                                                    entry_path = os.path.join(lang_path, entry_name)
+                                                    if os.path.isdir(entry_path):
+                                                        if not has_unknown_filename:
+                                                            info("Removing subdirectory(?!) " + entry_path)
+                                                            shutil.rmtree(entry_path) # There shouldn't be subdirectories here.
+                                                    elif not has_unknown_filename and entry_name not in expected_filenames:
+                                                        info("Removing outdated file " + entry_path)
+                                                        os.remove(entry_path)
                                     elif cur_dir_file== "extras":
                                         expected_filenames = []
                                         has_unknown_filename = False
@@ -1286,6 +1296,11 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
             if not os.path.isdir(fname):
                 os.makedirs(fname)
             for download in item.downloads:
+                # A missing OS/language means the metadata is incomplete. There is
+                # no safe destination for this XML, and joining None into a path
+                # would fail; leave existing MD5 data untouched instead.
+                if not download.os_type or not download.lang:
+                    continue
                 ffdir = os.path.join(fname,"downloads",download.os_type,download.lang)
                 if not os.path.isdir(ffdir):
                     os.makedirs(ffdir)
@@ -1679,35 +1694,57 @@ def item_checkdb(search_id, gamesdb):
             return i
     return None
 
-def handle_game_renames(savedir,gamesdb,dryrun):
+def _rename_destination_matches_item(path, item):
+    """Return True only when a destination is positively identified as this item.
+
+    Missing size or MD5 is not evidence of a match. This conservative check is
+    important when a destination name is reused by a circular rename.
+    """
+    expected_size = getattr(item, 'size', None)
+    expected_md5 = getattr(item, 'md5', None)
+    if expected_size is None or not expected_md5 or not os.path.isfile(path):
+        return False
+    try:
+        return os.path.getsize(path) == expected_size and hashfile(path).lower() == str(expected_md5).lower()
+    except OSError:
+        return False
+
+
+def _ensure_orphan_directory(savedir, game_folder):
+    """Create the game's orphan directory only when a real move is required."""
+    orphan_root = os.path.join(savedir, ORPHAN_DIR_NAME)
+    orphan_dir = os.path.join(orphan_root, game_folder)
+    os.makedirs(orphan_dir, exist_ok=True)
+    return orphan_dir
+
+
+def handle_game_renames(savedir, gamesdb, dryrun):
+    """Apply pending game/file renames and report whether the manifest changed.
+
+    File renames are staged before any destination is replaced. This makes
+    A->B/B->A (and longer cycles) safe: a source is never mistaken for an
+    unrelated destination merely because another rename has not run yet.
+    """
+    import tempfile
+
     info("scanning manifest for renames...")
-    orphan_root_dir = os.path.join(savedir, ORPHAN_DIR_NAME)
-    if not os.path.isdir(orphan_root_dir):
-        os.makedirs(orphan_root_dir)
+    have_renamed = False
 
     for game in gamesdb:
-        try:
-            _ = game.galaxyDownloads
-        except AttributeError:
+        if not hasattr(game, 'galaxyDownloads'):
             game.galaxyDownloads = []
-
-        try:
-            a = game.sharedDownloads
-        except AttributeError:
+        if not hasattr(game, 'sharedDownloads'):
             game.sharedDownloads = []
-        try:
-            _ = game.old_title
-        except AttributeError:
+        if not hasattr(game, 'old_title'):
             game.old_title = None
-        try:
-            _ = game.folder_name
-        except AttributeError:
+        if not hasattr(game, 'folder_name'):
             game.folder_name = game.title
-        try:
-            _ = game.old_folder_name
-        except AttributeError:
+        if not hasattr(game, 'old_folder_name'):
             game.old_folder_name = game.old_title
-        if (game.old_folder_name is not None):
+
+        # Rename the game directory. Clear old_folder_name only after the
+        # filesystem operation succeeds; a failed rename must remain retryable.
+        if game.old_folder_name is not None and game.old_folder_name != game.folder_name:
             src_dir = os.path.join(savedir, game.old_folder_name)
             dst_dir = os.path.join(savedir, game.folder_name)
             if os.path.isdir(src_dir):
@@ -1715,41 +1752,163 @@ def handle_game_renames(savedir,gamesdb,dryrun):
                     if os.path.exists(dst_dir):
                         warn("orphaning destination clash '{}'".format(dst_dir))
                         if not dryrun:
-                            move_with_increment_on_clash(dst_dir, os.path.join(orphan_root_dir,game.folder_name))
+                            orphan_dir = _ensure_orphan_directory(savedir, game.folder_name)
+                            move_with_increment_on_clash(dst_dir, os.path.join(orphan_dir, game.folder_name))
                     info('  -> renaming directory "{}" -> "{}"'.format(src_dir, dst_dir))
                     if not dryrun:
-                        move_with_increment_on_clash(src_dir,dst_dir)
+                        move_with_increment_on_clash(src_dir, dst_dir)
+                        game.old_folder_name = None
+                        have_renamed = True
                 except Exception:
                     error('    -> rename failed "{}" -> "{}"'.format(game.old_folder_name, game.folder_name))
-        for item in game.downloads+game.galaxyDownloads+game.sharedDownloads+game.extras:
-            try:
-                _ = item.old_name
-            except AttributeError:
-                item.old_name = None
 
-            if (item.old_name is not None):
-                game_dir =  os.path.join(savedir, game.folder_name)
-                src_file =  os.path.join(game_dir,item.old_name)
-                dst_file =  os.path.join(game_dir,item.name)
-                if os.path.isfile(src_file):
+        game_dir = os.path.join(savedir, game.folder_name)
+        all_game_files = (game.downloads + game.galaxyDownloads +
+                          game.sharedDownloads + game.extras)
+        pending = []
+        for item in all_game_files:
+            if not hasattr(item, 'old_name'):
+                item.old_name = None
+            if item.old_name is None or not getattr(item, 'name', None) or item.old_name == item.name:
+                continue
+            src_file = os.path.join(game_dir, item.old_name)
+            dst_file = os.path.join(game_dir, item.name)
+            pending.append((item, src_file, dst_file))
+
+        if not pending:
+            continue
+
+        # A destination with a matching size AND MD5 is already the requested
+        # file. Clear the stale rename marker, but never move that destination.
+        satisfied_destinations = set()
+        for item, src_file, dst_file in pending:
+            if _rename_destination_matches_item(dst_file, item):
+                satisfied_destinations.add(dst_file)
+                if not dryrun:
+                    item.old_name = None
+                    have_renamed = True
+                info('  -> destination already has the expected size and MD5: "{}"'.format(dst_file))
+
+        # A path that is already a verified destination must not also be moved
+        # as another item's source. Such ambiguous metadata is safer to leave
+        # pending than to corrupt either file.
+        candidates = []
+        for item, src_file, dst_file in pending:
+            if dst_file in satisfied_destinations:
+                continue
+            if src_file in satisfied_destinations:
+                warn('    -> skipping ambiguous rename because its source is already a verified destination: "{}"'.format(src_file))
+                continue
+            if os.path.isfile(src_file):
+                candidates.append((item, src_file, dst_file))
+            elif _rename_destination_matches_item(dst_file, item):
+                if not dryrun:
+                    item.old_name = None
+                    have_renamed = True
+            # If neither source nor a positively verified destination exists,
+            # keep old_name so the operation can be retried later.
+
+        if not candidates:
+            continue
+
+        # Duplicate sources or destinations cannot be resolved unambiguously.
+        source_counts = {}
+        destination_counts = {}
+        for _, src_file, dst_file in candidates:
+            source_counts[src_file] = source_counts.get(src_file, 0) + 1
+            destination_counts[dst_file] = destination_counts.get(dst_file, 0) + 1
+        ambiguous = {path for path, count in source_counts.items() if count > 1}
+        ambiguous.update(path for path, count in destination_counts.items() if count > 1)
+        if ambiguous:
+            for path in sorted(ambiguous):
+                warn('    -> skipping ambiguous rename involving duplicate path "{}"'.format(path))
+            candidates = [(item, src, dst) for item, src, dst in candidates
+                          if src not in ambiguous and dst not in ambiguous]
+        if not candidates:
+            continue
+
+        if dryrun:
+            for _, src_file, dst_file in candidates:
+                info('  -> renaming file "{}" -> "{}"'.format(src_file, dst_file))
+            continue
+
+        # Stage every source first. That frees all source paths before any
+        # destination is touched, which is what makes rename cycles safe.
+        staging_dir = tempfile.mkdtemp(prefix='.gogrepo-rename-', dir=game_dir)
+        staged = []
+        try:
+            staging_failed = False
+            for index, (item, src_file, dst_file) in enumerate(candidates):
+                staged_file = os.path.join(staging_dir, str(index))
+                try:
+                    shutil.move(src_file, staged_file)
+                    staged.append((item, src_file, dst_file, staged_file))
+                except Exception:
+                    error('    -> rename staging failed "{}"'.format(src_file))
+                    item.prev_verified = False
+                    have_renamed = True
+                    staging_failed = True
+                    break
+
+            # Do not begin changing destinations unless every source in this
+            # rename group was staged. Otherwise a failed source move could be
+            # orphaned as another operation's destination.
+            if staging_failed:
+                for item, src_file, dst_file, staged_file in staged:
+                    if os.path.exists(staged_file) and not os.path.exists(src_file):
+                        try:
+                            move_with_increment_on_clash(staged_file, src_file)
+                        except Exception:
+                            error('    -> could not restore staged file; it remains at "{}"'.format(staged_file))
+                staged = []
+            else:
+                for item, src_file, dst_file, staged_file in staged:
                     try:
                         if os.path.exists(dst_file):
+                            # A destination that was not another staged source is
+                            # a genuine clash. Preserve it in !orphaned first.
                             warn("orphaning destination clash '{}'".format(dst_file))
-                            dest_dir = os.path.join(orphan_root_dir, game.folder_name)
-                            if not os.path.isdir(dest_dir):
-                                if not dryrun:
-                                    os.makedirs(dest_dir)
-                            if not dryrun:
-                                move_with_increment_on_clash(dst_file, os.path.join(dest_dir,item.name))
+                            orphan_dir = _ensure_orphan_directory(savedir, game.folder_name)
+                            move_with_increment_on_clash(dst_file, os.path.join(orphan_dir, item.name))
                         info('  -> renaming file "{}" -> "{}"'.format(src_file, dst_file))
-                        if not dryrun:
-                            move_with_increment_on_clash(src_file,dst_file)
-                            item.old_name = None #only once
+                        move_with_increment_on_clash(staged_file, dst_file)
+                        item.old_name = None
+                        have_renamed = True
                     except Exception:
                         error('    -> rename failed "{}" -> "{}"'.format(src_file, dst_file))
-                        if not dryrun:
-                            item.prev_verified = False
+                        item.prev_verified = False
+                        have_renamed = True
+                        # Restore this file to its original name where possible.
+                        if os.path.exists(staged_file) and not os.path.exists(src_file):
+                            try:
+                                move_with_increment_on_clash(staged_file, src_file)
+                            except Exception:
+                                error('    -> could not restore staged file; it remains at "{}"'.format(staged_file))
 
+            # Roll back any sources that remain staged after a failed move.
+            for item, src_file, dst_file, staged_file in staged:
+                if os.path.exists(staged_file) and not os.path.exists(src_file):
+                    try:
+                        move_with_increment_on_clash(staged_file, src_file)
+                    except Exception:
+                        error('    -> could not restore staged file; it remains at "{}"'.format(staged_file))
+        finally:
+            try:
+                os.rmdir(staging_dir)
+            except OSError:
+                # A file that could not be restored is deliberately left in
+                # the staging directory and its path was logged above.
+                pass
+
+    return have_renamed
+
+
+def _handle_game_renames_and_save(savedir, items, dryrun, manifest_items=None):
+    """Run rename handling and persist changed state to the complete manifest."""
+    changed = handle_game_renames(savedir, items, dryrun)
+    if changed and not dryrun:
+        save_manifest(items if manifest_items is None else manifest_items)
+    return changed
 
 
 def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update_extras_strict):
@@ -5109,16 +5268,20 @@ def _clean_work_dir(work_dir, all_items_by_title, dryrun, skip_dir=None):
                             shutil.rmtree(cur_fulldir)
                     else:
                         # dir is valid game folder, check its files
-                        expected_filenames = []
-                        for game_item in all_items_by_title[cur_dir].downloads + all_items_by_title[cur_dir].galaxyDownloads +all_items_by_title[cur_dir].sharedDownloads + all_items_by_title[cur_dir].extras:
-                            expected_filenames.append(game_item.name)
+                        game_items = (all_items_by_title[cur_dir].downloads + all_items_by_title[cur_dir].galaxyDownloads +
+                                      all_items_by_title[cur_dir].sharedDownloads + all_items_by_title[cur_dir].extras)
+                        has_unknown_filename = any(game_item.name is None and not getattr(game_item, 'unreleased', False) for game_item in game_items)
+                        expected_filenames = [game_item.name for game_item in game_items if game_item.name is not None]
+                        if has_unknown_filename:
+                            warn("Not removing unrecognized files from %s because one or more manifest filenames are unknown" % cur_fulldir)
                         for cur_dir_file in os.listdir(cur_fulldir):
                             if os.path.isdir(os.path.join(work_dir, cur_dir, cur_dir_file)):
-                                info("Removing subdirectory(?!) " + os.path.join(work_dir, cur_dir, cur_dir_file))
-                                if not dryrun:
-                                    shutil.rmtree(os.path.join(work_dir, cur_dir, cur_dir_file)) #There shouldn't be subdirectories here ?? Nuke to keep clean.
+                                if not has_unknown_filename:
+                                    info("Removing subdirectory(?!) " + os.path.join(work_dir, cur_dir, cur_dir_file))
+                                    if not dryrun:
+                                        shutil.rmtree(os.path.join(work_dir, cur_dir, cur_dir_file)) #There shouldn't be subdirectories here ?? Nuke to keep clean.
                             else:
-                                if cur_dir_file not in expected_filenames:
+                                if not has_unknown_filename and cur_dir_file not in expected_filenames:
                                     info("Removing outdated file " + os.path.join(work_dir, cur_dir, cur_dir_file))
                                     if not dryrun:
                                         os.remove(os.path.join(work_dir, cur_dir, cur_dir_file))
@@ -5964,7 +6127,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
 
     items = _select_download_items(items, ids, skipids, skipfiles)
 
-    handle_game_renames(savedir,items,dryrun)
+    _handle_game_renames_and_save(savedir, items, dryrun, manifest_items=all_items)
 
     all_items_by_title = _index_items_by_title(all_items)
 
@@ -6579,7 +6742,7 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
         formattedSkipFiles = "'" + "', '".join(skipfiles) + "'"
         info("skipping files that match: {%s}" % formattedSkipFiles)
 
-    handle_game_renames(gamedir,items,False)
+    _handle_game_renames_and_save(gamedir, items, False)
 
 
     if clean_on_fail:
@@ -7268,7 +7431,7 @@ def cmd_clean(cleandir, dryrun, items=None):
             os.makedirs(orphan_root_dir)
 
     info("scanning local directories within '{}'...".format(cleandir))
-    handle_game_renames(cleandir,items,dryrun)
+    _handle_game_renames_and_save(cleandir, items, dryrun)
     for cur_dir in sorted(os.listdir(cleandir)):
         changed_game_items = {}
         cur_fulldir = os.path.join(cleandir, cur_dir)
@@ -7282,8 +7445,13 @@ def cmd_clean(cleandir, dryrun, items=None):
                     run_report.count('folders moved to the orphan folder')
             else:
                 # dir is valid game folder, check its files
-                expected_filenames = []
-                for game_item in items_by_title[cur_dir].downloads + items_by_title[cur_dir].galaxyDownloads + items_by_title[cur_dir].sharedDownloads + items_by_title[cur_dir].extras:
+                game_items = (items_by_title[cur_dir].downloads + items_by_title[cur_dir].galaxyDownloads +
+                              items_by_title[cur_dir].sharedDownloads + items_by_title[cur_dir].extras)
+                has_unknown_filename = any(game_item.name is None and not getattr(game_item, 'unreleased', False) for game_item in game_items)
+                expected_filenames = [game_item.name for game_item in game_items if game_item.name is not None]
+                if has_unknown_filename:
+                    warn("Not orphaning unrecognized files from %s because one or more manifest filenames are unknown" % cur_fulldir)
+                for game_item in game_items:
                     try:
                         _ = game_item.force_change
                     except AttributeError:
@@ -7303,7 +7471,7 @@ def cmd_clean(cleandir, dryrun, items=None):
                 for cur_dir_file in os.listdir(cur_fulldir):
                     if os.path.isdir(os.path.join(cleandir, cur_dir, cur_dir_file)):
                         continue  # leave subdirs alone
-                    if cur_dir_file not in expected_filenames and cur_dir_file not in ORPHAN_FILE_EXCLUDE_LIST:
+                    if not has_unknown_filename and cur_dir_file not in expected_filenames and cur_dir_file not in ORPHAN_FILE_EXCLUDE_LIST:
                         info("orphaning file '{}'".format(os.path.join(cur_dir, cur_dir_file)))
                         dest_dir = os.path.join(orphan_root_dir, cur_dir)
                         if not os.path.isdir(dest_dir):

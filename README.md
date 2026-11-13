@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.60-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.62-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -44,7 +44,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.60` |
+| **Current version** | `v0.5.62` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -610,7 +610,9 @@ The program keeps its state files in the current working directory (unless confi
 | `gog-wishlist.csv` | Default CSV output of `wishlist --csv`. |
 | `!md5_xmls/` | Cached MD5 XML files used to resume and verify downloads. |
 
-MD5 XML cleanup follows the current manifest, but is conservative when GOG metadata is incomplete. If a download or released extra has no filename, existing XML files in its affected folder are kept; they are only pruned as obsolete when the manifest has enough filename information to make that decision safely.
+Rename recovery is also conservative. A successful file or folder rename is saved to the manifest so the next run does not repeat it. File rename cycles (for example, two installers swapping names) are staged before destinations are changed; a destination is treated as already correct only when both its size and MD5 match the manifest. If a rename fails, its old name remains in the manifest for a later retry. A dry run does not create rename staging or orphan directories.
+
+Cleanup is conservative when GOG metadata is incomplete. If a download, Galaxy download, shared download, or released extra has no filename, `clean` and the `!downloading` cleanup leave unrecognized files in that game's folder rather than treating them as obsolete. MD5 XML cleanup also keeps existing OS and language directories when an entry has no OS or language, and keeps XML files when a filename is unknown. These files may be cleaned on a later run after the manifest contains complete metadata; missing metadata is not treated as proof that local data is obsolete.
 
 ### Manifest format and recovery
 
