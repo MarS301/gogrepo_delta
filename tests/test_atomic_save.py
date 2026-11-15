@@ -158,11 +158,5 @@ class TokenAndConfig(Base):
         self.assertEqual(loaded.rows[0].x, 1)
         self.assertEqual(loaded.text, 'keep }) exactly')
 
-    def test_config_roundtrip(self):
-        p = os.path.join(self.d, 'gog-config.dat')
-        with mock.patch.object(NEW, 'CONFIG_FILENAME', p):
-            cfg = [NEW.AttrDict(a=1), NEW.AttrDict(b=2)]
-            NEW.save_config_file(cfg); self.assertEqual(NEW.load_config_file(p), cfg)
-
 if __name__ == '__main__':
     unittest.main(verbosity=2)

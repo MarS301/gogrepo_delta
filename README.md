@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.66-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.67-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -44,7 +44,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.66` |
+| **Current version** | `v0.5.67` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -622,7 +622,7 @@ The program keeps its state files in the current working directory (unless confi
 | `gog-manifest.dat.bak` | Previous manifest version. |
 | `gog-manifest.dat.legacy` | One-time preservation of the old manifest format during migration. |
 | `gog-resume-manifest.dat` | State used to resume interrupted updates. |
-| `gog-config.dat` | Internal GOG configuration data. |
+| `gog-config.dat` | Leftover of older versions; the program does not use it any more and you can delete it. |
 | `gogrepo.log` | Log file. |
 | `gog-library.csv` | Default CSV export output. |
 | `gog-wishlist.json` | Default output of `wishlist`; the next run compares with it. |

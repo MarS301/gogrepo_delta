@@ -137,7 +137,7 @@ class FilterTests(Checks):
     def test_unknown_id_exits_with_an_error(self):
         r = result('ids_not_found')
         self.assertEqual(r['exc'], ('SystemExit', '1'))
-        self.assertLogged(r, 'no game with id in', 'ERROR')
+        self.assertLogged(r, 'no game or movie with id in', 'ERROR')
 
     def test_ids_and_skipids_that_leave_nothing_exit(self):
         self.assertEqual(result('ids_and_skipids_empty')['exc'], ('SystemExit', '1'))
@@ -146,7 +146,7 @@ class FilterTests(Checks):
     def test_empty_manifest_exits(self):
         r = result('empty_manifest')
         self.assertEqual(r['exc'], ('SystemExit', '1'))
-        self.assertLogged(r, 'no game found', 'ERROR')
+        self.assertLogged(r, 'no game or movie found', 'ERROR')
 
     def test_download_limit_is_respected(self):
         # limit 6000 bytes; games are processed in folder order ("Beta Game" before "alpha"), each file is
