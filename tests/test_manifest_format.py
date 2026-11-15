@@ -274,27 +274,27 @@ class ExportTests(TempDirTests):
         self.make_library()
         g.cmd_export('gog-library.csv', None, ',')
         rows = self.rows()
-        self.assertEqual(rows[0][:6], ['game id', 'title', 'folder', 'kind', 'file', 'operating system'])
+        self.assertEqual(rows[0][:7], ['game id', 'title', 'media', 'folder', 'kind', 'file', 'operating system'])
         self.assertEqual(len(rows), 1 + 2 + 4)           # header, game_0: installer + manual, game_1: 2 installers + 2 extras (one unnamed)
         first = rows[1]
-        self.assertEqual((first[1], first[3], first[4], first[5], first[6]), ('game_0', 'standalone', 'setup_0.exe', 'windows', 'English'))
-        self.assertEqual(first[8:10], ['1234567', '1.18MB'])
+        self.assertEqual((first[1], first[2], first[4], first[5], first[6], first[7]), ('game_0', 'game', 'standalone', 'setup_0.exe', 'windows', 'English'))
+        self.assertEqual(first[9:11], ['1234567', '1.18MB'])
 
     def test_extras_have_no_system_or_language(self):
         self.make_library()
         g.cmd_export('gog-library.csv', None, ',')
-        extras = [r for r in self.rows() if r[3] == 'extra']
+        extras = [r for r in self.rows() if r[4] == 'extra']
         self.assertTrue(extras)
         for row in extras:
-            self.assertEqual((row[5], row[6]), ('', ''))
+            self.assertEqual((row[6], row[7]), ('', ''))
 
     def test_special_characters_and_missing_values_are_handled(self):
         self.make_library()
         g.cmd_export('gog-library.csv', None, ';')
         rows = self.rows(delimiter=';')
-        odd = [r for r in rows if r[4] == 'odd; name "x".exe'][0]
-        self.assertEqual((odd[5], odd[6], odd[8], odd[9]), ('linux', 'Deutsch', '', ''))
-        self.assertTrue(any(r[4] == '' and r[3] == 'extra' for r in rows))
+        odd = [r for r in rows if r[5] == 'odd; name "x".exe'][0]
+        self.assertEqual((odd[6], odd[7], odd[9], odd[10]), ('linux', 'Deutsch', '', ''))
+        self.assertTrue(any(r[5] == '' and r[4] == 'extra' for r in rows))
 
     def test_the_file_starts_with_a_byte_order_mark_for_excel(self):
         self.make_library()
@@ -310,7 +310,7 @@ class ExportTests(TempDirTests):
         with open('lib/game_0/manual.pdf', 'wb') as f:
             f.write(b'x')                                  # wrong size
         g.cmd_export('gog-library.csv', 'lib', ',')
-        rows = {(r[1], r[4]): r[13] for r in self.rows()[1:]}          # after the update date and the update time
+        rows = {(r[1], r[5]): r[14] for r in self.rows()[1:]}          # after the update date and the update time
         self.assertEqual(rows[('game_0', 'setup_0.exe')], 'yes')
         self.assertEqual(rows[('game_0', 'manual.pdf')], 'wrong size')
         self.assertEqual(rows[('game_1', 'setup_1.exe')], 'no')

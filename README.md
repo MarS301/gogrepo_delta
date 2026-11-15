@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.62-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.64-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -44,7 +44,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.62` |
+| **Current version** | `v0.5.64` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -67,6 +67,7 @@ library and helps you maintain a dependable, verifiable local collection.
 - [Commands](#commands)
   - [login](#login)
   - [update](#update)
+  - [Movies](#movies)
   - [download](#download)
   - [verify](#verify)
   - [import](#import)
@@ -124,18 +125,11 @@ The binaries are not code-signed, so your operating system may show a warning th
 - `html5lib`
 - `requests`
 - `psutil`
-- **macOS only:** `pyobjc-framework-Cocoa` (PyObjC; it provides CoreFoundation, which the program uses to keep the Mac awake during long runs). Install it on every Mac that runs the program. If it is missing the program still starts, but it prints one warning and does not keep the computer awake, so a long `update` or `download` can be interrupted by sleep.
 
 Install the required packages, plus `cryptography`, which is optional but strongly recommended (see below):
 
 ```bash
 python -m pip install html5lib requests psutil cryptography
-```
-
-On macOS also install:
-
-```bash
-python -m pip install pyobjc-framework-Cocoa
 ```
 
 Download `gogrepo_delta.py` into a working directory and run it with Python:
@@ -152,6 +146,12 @@ The script must be started with a Python interpreter; do not execute it as a she
 
   ```bash
   python -m pip install cryptography
+  ```
+
+- **macOS:** `pyobjc-framework-Cocoa` (PyObjC; it provides CoreFoundation, which the program uses to keep the Mac awake during long runs). It is optional: without it the program still starts, prints one warning and does not keep the computer awake, so a long `update` or `download` can be interrupted by sleep. The ready-made macOS binaries contain it; when you run the script with Python it is worth installing:
+
+  ```bash
+  python -m pip install pyobjc-framework-Cocoa
   ```
 
 - `html2text` (2015.6.21 or newer): converts downloaded GOG changelogs from HTML to readable text.
@@ -311,6 +311,25 @@ Useful options:
 - `--diagnostic`: perform more exhaustive GOG data checks (slower and more verbose).
 - `--wait HOURS`: wait before starting.
 - `--installers {standalone,both}`: legacy installer selection option (deprecated).
+- `--movies`: also put your GOG movies into the manifest (see [Movies](#movies)). Off by default.
+- `--moviequality LIST`: which video variants of a movie to take (default `best`; see [Movies](#movies)).
+
+### Movies
+
+GOG's movies (documentaries, concerts, "making of" films that you own) are not part of the default `update`, because a single movie can be many gigabytes. Switch them on with `--movies` (or `movies = true` in the `[update]` section of the config file); everything else (`download`, `verify`, `backup`, `clean`, `list`, `export`) then treats them like any other item of the manifest.
+
+```bash
+python gogrepo_delta.py update --movies
+python gogrepo_delta.py update --movies --moviequality 1080p,720p
+python gogrepo_delta.py list --format table
+```
+
+- **Folders.** A movie gets the folder `<name>-movie` next to the game folders (`deliverance_the_making_of_kingdom_come-movie`), so that movies are easy to tell apart. The file names are the ones GOG's server gives (`deliverance_making_of_kingdom_come_1080p.mp4`).
+- **Which video variants.** A movie is offered in several qualities (720p, 1080p, 4K, dvd, 576p, ...). `--moviequality` takes `best` (the default: the highest resolution), `all`, one quality (`1080p`), `max:<quality>` (the best that is not above it, for example `max:1080p`) or a list in the order of preference (`1080p,720p`: the first that the movie offers). If the movie offers none of the listed qualities the best one is taken, so a movie is never left without its video. The subtitles that come with a movie are always taken, and its extras follow `--skipextras` like those of a game.
+- **Language.** A movie is taken in the wanted languages; if it is not offered in any of them, in English, and if it has no English either, in the language it has.
+- **No operating system.** Movies are not chosen by `--os`; `--os linux` still takes them.
+- **Update without `--movies`.** The movies already in the manifest are left exactly as they are (they are not removed and `clean` does not touch their folders). They are removed only by an update with `--movies` when they are no longer in your library.
+- **Checking.** A movie file is checked by its size (GOG publishes no checksum for video files), like the extras.
 
 ### `download`
 
@@ -400,7 +419,7 @@ python gogrepo_delta.py list witcher
 python gogrepo_delta.py list --format ids
 ```
 
-Search terms are matched against game IDs, titles, and names; all supplied words must match, in any order. Put search words before options.
+Search terms are matched against game IDs, titles, and names; all supplied words must match, in any order. Put search words before options. The `MEDIA` column says `game` or `movie`; the files of a movie are listed with the operating system `vid`.
 
 - `--format table`: readable table output (default).
 - `--format ids`: one game title/ID per line for use in scripts.
@@ -416,7 +435,7 @@ python gogrepo_delta.py export --output my-library.csv
 python gogrepo_delta.py export --savedir "/path/to/GOG games"
 ```
 
-Exports one CSV row per manifest file. The spreadsheet includes game ID/title, folder, file type, filename, OS, language, version, size, MD5, and the update date and the update time (UTC) in two columns, so that Excel and other spreadsheet programs show them in the format of your computer's language (the cells hold `2026-06-23` and `16:59:00`, forms every spreadsheet understands). `--savedir DIR` adds an on-disk status column.
+Exports one CSV row per manifest file. If the CSV file is open in another program (Excel keeps a file it has open locked) `export` says so before it does anything and changes nothing; close the file and run it again. The spreadsheet includes game ID/title, a `media` column (`game` or `movie`), folder, file type, filename, OS, language, version, size, MD5, and the update date and the update time (UTC) in two columns, so that Excel and other spreadsheet programs show them in the format of your computer's language (the cells hold `2026-06-23` and `16:59:00`, forms every spreadsheet understands). `--savedir DIR` adds an on-disk status column.
 
 - `--output FILE`: output path (default: `gog-library.csv`).
 - `--delimiter CHAR`: set the CSV separator. By default, the separator is selected for common spreadsheet locale conventions.

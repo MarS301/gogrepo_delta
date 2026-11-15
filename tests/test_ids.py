@@ -349,7 +349,7 @@ class ListCommandTests(unittest.TestCase):
     def test_all_games_in_a_table(self):
         out, log = self.run_list([], [], [], [], [])
         lines = self.lines(out)
-        self.assertEqual(lines[0].split(), ['ID', 'TITLE', 'NAME', 'OS', 'LANG', 'FILES', 'SIZE'])
+        self.assertEqual(lines[0].split(), ['ID', 'TITLE', 'NAME', 'MEDIA', 'OS', 'LANG', 'FILES', 'SIZE'])
         self.assertEqual(len(lines), 1 + len(self.items))
         for game in self.items:
             self.assertEqual(sum(1 for l in lines if game.title in l), 1 if game.title not in ('dune',) else 2, game.title)
@@ -366,7 +366,7 @@ class ListCommandTests(unittest.TestCase):
         out, log = self.run_list([], [], [], [], [])
         lines = self.lines(out)
         header = lines[0]
-        starts = [header.index(h) for h in ('TITLE', 'NAME', 'OS')]
+        starts = [header.index(h) for h in ('TITLE', 'NAME', 'MEDIA', 'OS')]
         for line in lines[1:]:
             if any(ord(c) > 0x2e80 for c in line):
                 continue                                 # wide characters: character positions are not screen columns (own test)
