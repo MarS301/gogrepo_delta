@@ -29,6 +29,7 @@ The tests run inside a scratch folder that is removed afterwards (`_bootstrap.py
 | test_ids | name matching and `-ids` / `-skipids` (exact, normalised, ambiguous, typos, unquoted words), suggestions, `list` command (search, table, filters, output streams), and how download, verify, import and backup use them |
 | test_chunk_tree | `fetch_chunk_tree`: every branch of getting a file's checksum data, including the signed-address case that used to raise NameError |
 | test_chunk_retry | the retry loop of chunk verification: waits `http_retry_delay` between tries, none after the last, not holding the lock |
+| test_messages | the progress lines and the wording of the download and id messages, and the code that was removed because nothing used it |
 | test_movies | `update -movies`: the quality choice and the language fallback, the three real GOG answers in `tests/data/movies` as fixtures, movies not chosen by `-os`, left alone by an update without `-movies`, the folder suffix, resume, and the media column of `list` and `export` |
 | test_export_lock | `export` refusing a CSV file that cannot be written (open in Excel) in words, before the manifest is read, and when the opening fails after the check |
 | test_export_update_time | the update date and the update time (UTC) in two columns of the CSV export (time zones, midnight, missing stamps) and the readable text of a refused price |

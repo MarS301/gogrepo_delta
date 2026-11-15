@@ -249,12 +249,6 @@ class CommandLineTests(unittest.TestCase):
         with mock.patch.object(g, 'makeGitHubSession', lambda: FakeSession(FakeResponse(500))), self.assertLogs('gogrepoc', level='INFO'):
             self.assertEqual(g.main(self.parse('selfupdate')), 1)
 
-    def test_update_self_is_still_not_connected_to_any_command(self):
-        with mock.patch.object(g, 'update_self', side_effect=AssertionError('must not run')) as old:
-            with mock.patch.object(g, 'makeGitHubSession', lambda: FakeSession(release())), self.assertLogs('gogrepoc', level='INFO'):
-                g.main(self.parse('selfupdate'))
-        old.assert_not_called()
-
 
 if __name__ == '__main__':
     unittest.main()

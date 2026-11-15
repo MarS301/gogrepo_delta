@@ -129,8 +129,8 @@ class IdentityTests(unittest.TestCase):
         self.assertIn('gogrepo_delta.py (version %s)' % g.__version__, out.getvalue())
 
     def test_data_files_and_log_keep_their_names(self):
-        self.assertEqual((g.MANIFEST_FILENAME, g.TOKEN_FILENAME, g.RESUME_MANIFEST_FILENAME, g.CONFIG_FILENAME),
-                         ('gog-manifest.dat', 'gog-token.json', 'gog-resume-manifest.dat', 'gog-config.dat'))
+        self.assertEqual((g.MANIFEST_FILENAME, g.TOKEN_FILENAME, g.RESUME_MANIFEST_FILENAME),
+                         ('gog-manifest.dat', 'gog-token.json', 'gog-resume-manifest.dat'))
         self.assertEqual(os.path.basename(g.loggingHandler.baseFilename), 'gogrepo.log')
 
 

@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.66'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.67'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -64,7 +64,6 @@ import csv
 import zlib
 from fnmatch import fnmatch
 import email.utils
-import signal
 import psutil
 import glob
 import tempfile
@@ -420,13 +419,12 @@ MANIFEST_FILENAME = r'gog-manifest.dat'
 RESUME_MANIFEST_FILENAME = r'gog-resume-manifest.dat'
 TEMP_EXT = r'.tmp'
 BACKUP_EXT = r'.bak'
-CONFIG_FILENAME = r'gog-config.dat'
 SERIAL_FILENAME = r'!serial.txt'
 INFO_FILENAME = r'!info.txt'
 
 
 #github API URLs
-REPO_HOME_URL = "https://api.github.com/repos/MarS301/gogrepo_delta"   # for selfupdate, and for update_self (not connected to any command, see the known issues in CHANGELOG.md)
+REPO_HOME_URL = "https://api.github.com/repos/MarS301/gogrepo_delta"   # for selfupdate
 NEW_RELEASE_URL = "/releases/latest"
 RELEASES_PAGE_URL = "https://github.com/MarS301/gogrepo_delta/releases"   # where selfupdate sends the user; a release address from GitHub is only shown if it starts with this
 SELFUPDATE_MAX_BYTES = 1024 * 1024   # selfupdate reads at most this much of GitHub's answer
@@ -776,7 +774,6 @@ ORPHAN_DIR_EXCLUDE_LIST = [ORPHAN_DIR_NAME,DOWNLOADING_DIR_NAME,IMAGES_DIR_NAME,
 ORPHAN_FILE_EXCLUDE_LIST = [INFO_FILENAME, SERIAL_FILENAME]
 RESUME_SAVE_THRESHOLD = SETTING_VALUES['resume_save_threshold']
 
-MANIFEST_SYNTAX_VERSION = 1
 RESUME_MANIFEST_SYNTAX_VERSION = 1
 
 token_lock = threading.RLock()
@@ -1656,27 +1653,6 @@ def load_resume_manifest(filepath=RESUME_MANIFEST_FILENAME):
     except IOError:
         return []
 
-def save_config_file(items):
-    info('saving config...')
-    def write(w):
-        print('# {} games'.format(len(items)-1), file=w)
-        pprint.pprint(items, width=123, stream=w)
-    try:
-        atomic_write_text(CONFIG_FILENAME, write)
-        info('saved config')
-    except KeyboardInterrupt:
-        atomic_write_text(CONFIG_FILENAME, write)
-        info('saved config')
-        raise
-
-def load_config_file(filepath=CONFIG_FILENAME):
-    info('loading config...')
-    try:
-        with open(filepath, mode='r', encoding='utf-8') as r:
-            ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
-        return _load_legacy_literal(ad)
-    except IOError:
-        return []
 def open_notrunc(name, bufsize=4*1024):
     flags = os.O_WRONLY | os.O_CREAT
     if hasattr(os, "O_BINARY"):
@@ -4556,9 +4532,6 @@ def load_token(filepath=None):
         return legacy
     return {}
 
-def input_timeout(*ignore):
-    raise TimeoutError
-
 
 
 class UpdateNarrowing(object):
@@ -4902,7 +4875,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             invalids = invalidIDs + invalidTitles
             if invalids:
                 formattedInvalids =  ', '.join(map(str, invalids))
-                warn(' game id(s) from {%s} were in your manifest but not your product data ' % formattedInvalids)
+                warn(' id(s) from {%s} were in your manifest but not in your product data ' % formattedInvalids)
                 titlesToIDs = [(game.id,game.title) for game in gamesdb if game.title in invalidTitles]
                 for invalidID in invalidIDs:
                     warn('Removing id "{}" from manifest'.format(invalidID))
@@ -4929,7 +4902,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 warn('nothing to do')
             if idsOriginal:
                 formattedIds =  ', '.join(map(str, idsOriginal))
-                warn('with game id(s) from {%s}' % formattedIds)
+                warn('with id(s) from {%s}' % formattedIds)
             return
 
 
@@ -4941,7 +4914,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             info('found %d games !!%s' % (items_count, '!'*int(items_count/100)))  # teehee
             if skipids:
                 formattedSkipIds =  ', '.join(map(str, skipids))
-                info('not including game id(s) from {%s}' % formattedSkipIds)
+                info('not including id(s) from {%s}' % formattedSkipIds)
 
 
     # fetch item details
@@ -5467,13 +5440,13 @@ def _select_download_items(items, ids, skipids, skipfiles):
     all_items = items          # -ids and -skipids are looked up among all games, not only among the ones left after -ids
     if ids:
         formattedIds =  ', '.join(map(str, ids))
-        info("downloading games with id(s): {%s}" % formattedIds)
+        info("downloading id(s)/title(s): {%s}" % formattedIds)
         selected = resolve_ids_and_report(all_items, ids, '-ids')       # also reports what matches no game
         items = [item for item in items if item.id in selected]
 
     if skipids:
         formattedSkipIds =  ', '.join(map(str, skipids))
-        info("skipping games with id(s): {%s}" % formattedSkipIds)
+        info("skipping id(s)/title(s): {%s}" % formattedSkipIds)
         skipped = resolve_ids_and_report(all_items, skipids, '-skipids')
         items = [item for item in items if item.id not in skipped]
 
@@ -5483,13 +5456,13 @@ def _select_download_items(items, ids, skipids, skipfiles):
 
     if not items:
         if ids and skipids:
-            error('no game(s) with id(s) in "{}" was found'.format(ids) + 'after skipping game(s) with id(s) in "{}".'.format(skipids))
+            error('no game or movie with id(s) in "{}" was found after skipping the ones with id(s) in "{}".'.format(ids, skipids))
         elif ids:
-            error('no game with id in "{}" was found.'.format(ids))
+            error('no game or movie with id in "{}" was found.'.format(ids))
         elif skipids:
-            error('no game was found was found after skipping game(s) with id(s) in "{}".'.format(skipids))
+            error('no game or movie was found after skipping the ones with id(s) in "{}".'.format(skipids))
         else:
-            error('no game found')
+            error('no game or movie found')
         exit(1)
     return items
 
@@ -6377,10 +6350,11 @@ def _report_progress(job):
                 szs, ts = flows.get(tid, (0, 0))
                 flows[tid] = sz + szs, t + ts
             bps = sum(szs/ts for szs, ts in list(flows.values()) if ts > 0)
-            info('%10s %8.1fMB/s %2dx  %s' % \
-                (_megs(job.sizes[path]), bps / 1024.0**2, len(flows), "%s/%s" % (os.path.basename(os.path.split(path)[0]), os.path.split(path)[1])))
+            info('%10s left  %6.1fMB/s  %2d %-11s  %s' % \
+                (_megs(job.sizes[path]), bps / 1024.0**2, len(flows), 'connection' if len(flows) == 1 else 'connections',
+                 "%s/%s" % (os.path.basename(os.path.split(path)[0]), os.path.split(path)[1])))
         if len(job.rates) != 0:  # only update if there's change
-            info('%s remaining' % _gigs(left))
+            info('%s remaining in total' % _gigs(left))
         job.rates.clear()
 
 
@@ -8089,62 +8063,6 @@ def cmd_selfupdate(check=True):
         info('this is the latest release (%s)' % shown)
     else:
         info('this version is newer than the latest release (%s): a development version?' % shown)
-
-
-def update_self():
-    #To-Do: add auto-update to main using Last-Modified (repo for rolling, latest release for standard)
-    #Add a dev mode which skips auto-updates and a manual update command which can specify rolling/standard
-    # Since 302 is not an error can use the standard session handling for this. Rewrite appropriately
-    gitSession = makeGitHubSession()
-    #if mode = Standard
-    response = gitSession.get(REPO_HOME_URL+NEW_RELEASE_URL,stream="False",timeout=HTTP_TIMEOUT,headers={'If-Modified-Since':'Mon, 16 Jul 2018 08:51:22 GMT'})
-    response.raise_for_status()
-    if response.status_code == 304:
-        info("Not Modified")
-        sys.exit()
-    debug("%s", response.headers)
-    jsonResponse = response.json()
-    debug("%s", response.headers)
-    debug("%s", jsonResponse)
-    with open('updatetest.test', mode='w', encoding='utf-8') as w:
-        debug("%s", response.headers)
-        print(jsonResponse, file=w)
-    response = gitSession.get(jsonResponse['tarball_url'],stream="False",timeout=HTTP_TIMEOUT)
-    response.raise_for_status()
-    rawResponse = response.content
-    debug("%s", response.headers)
-    with open('tarballupdatetest.test', mode='w', encoding='utf-8') as w:
-        print(response.headers,file=w)
-    with open_notrunc('update.tar.gz') as w:
-        w.write(rawResponse)
-
-    #if mode = Rolling
-    response = gitSession.get(REPO_HOME_URL,stream="False",timeout=HTTP_TIMEOUT)
-    response.raise_for_status()
-    jsonResponse = response.json()
-    debug("%s", response.headers)
-    debug("%s", jsonResponse)
-    with open('rollingupdatetest.test', mode='w', encoding='utf-8') as w:
-        print(response.headers,file=w)
-        print(jsonResponse, file=w)
-    response = gitSession.get(REPO_HOME_URL+"/tarball/master",stream="False",timeout=HTTP_TIMEOUT)
-    response.raise_for_status()
-    rawResponse = response.content
-    debug("%s", response.headers)
-    with open('tarballrollingupdatetest.test', mode='w', encoding='utf-8') as w:
-        print(response.headers,file=w)
-    with open_notrunc('rolling.tar.gz') as w:
-        w.write(rawResponse)
-
-def purge_md5_chunkdata():
-    all_games = load_manifest()
-    for game in all_games:
-        for item in game.downloads + game.galaxyDownloads + game.extras + game.sharedDownloads:
-            try:
-                del item.gog_data["md5_xml"]
-            except KeyError:
-                pass
-    save_manifest(all_games)
 
 def main(args):
     """Run the command. Returns the exit status: 0, or 1 if something failed (see the summary at the end of the run)."""
