@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.64'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.66'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -1834,50 +1834,161 @@ def _ensure_orphan_directory(savedir, game_folder):
     return orphan_dir
 
 
-def handle_game_renames(savedir, gamesdb, dryrun):
-    """Apply pending game/file renames and report whether the manifest changed.
+def _rename_game_directories(savedir, gamesdb, dryrun):
+    """Rename game folders as one staged group, so folder-name cycles are safe.
 
-    File renames are staged before any destination is replaced. This makes
-    A->B/B->A (and longer cycles) safe: a source is never mistaken for an
-    unrelated destination merely because another rename has not run yet.
+    All source directories are moved to a temporary sibling directory before
+    any destination is touched. This supports swaps and longer cycles without
+    orphaning another game's source directory as a destination clash.
     """
     import tempfile
 
-    info("scanning manifest for renames...")
-    have_renamed = False
-
+    candidates = []
     for game in gamesdb:
-        if not hasattr(game, 'galaxyDownloads'):
-            game.galaxyDownloads = []
-        if not hasattr(game, 'sharedDownloads'):
-            game.sharedDownloads = []
         if not hasattr(game, 'old_title'):
             game.old_title = None
         if not hasattr(game, 'folder_name'):
             game.folder_name = game.title
         if not hasattr(game, 'old_folder_name'):
             game.old_folder_name = game.old_title
+        old_name = game.old_folder_name
+        new_name = game.folder_name
+        if old_name is None or new_name is None or old_name == new_name:
+            continue
+        # Game folders are immediate children of savedir. Refuse path-like
+        # metadata rather than allowing a rename to escape the library root.
+        if (os.path.basename(old_name) != old_name or old_name in ('.', '..') or
+                os.path.basename(new_name) != new_name or new_name in ('.', '..')):
+            warn('    -> skipping unsafe game-folder rename "{}" -> "{}"'.format(old_name, new_name))
+            continue
+        src_dir = os.path.join(savedir, old_name)
+        dst_dir = os.path.join(savedir, new_name)
+        if os.path.isdir(src_dir):
+            candidates.append((game, src_dir, dst_dir))
 
-        # Rename the game directory. Clear old_folder_name only after the
-        # filesystem operation succeeds; a failed rename must remain retryable.
-        if game.old_folder_name is not None and game.old_folder_name != game.folder_name:
-            src_dir = os.path.join(savedir, game.old_folder_name)
-            dst_dir = os.path.join(savedir, game.folder_name)
-            if os.path.isdir(src_dir):
+    if not candidates:
+        return False
+
+    source_counts = {}
+    destination_counts = {}
+    for _, src, dst in candidates:
+        source_counts[src] = source_counts.get(src, 0) + 1
+        destination_counts[dst] = destination_counts.get(dst, 0) + 1
+    ambiguous = {path for path, count in source_counts.items() if count > 1}
+    ambiguous.update(path for path, count in destination_counts.items() if count > 1)
+    if ambiguous:
+        for path in sorted(ambiguous):
+            warn('    -> skipping ambiguous game-folder rename involving "{}"'.format(path))
+        candidates = [(game, src, dst) for game, src, dst in candidates
+                      if src not in ambiguous and dst not in ambiguous]
+    if not candidates:
+        return False
+
+    if dryrun:
+        for _, src, dst in candidates:
+            info('  -> renaming directory "{}" -> "{}"'.format(src, dst))
+        return False
+
+    staging_root = tempfile.mkdtemp(prefix='.gogrepo-dir-rename-', dir=savedir)
+    staged = []
+    orphaned = []
+    committed = []
+    try:
+        # Phase 1: free every source path before considering any destination.
+        for index, (game, src, dst) in enumerate(candidates):
+            staged_path = os.path.join(staging_root, str(index))
+            try:
+                shutil.move(src, staged_path)
+                staged.append((game, src, dst, staged_path))
+            except Exception:
+                error('    -> game-directory staging failed "{}"'.format(src))
+                for _, original, _, staged_path in reversed(staged):
+                    if os.path.lexists(staged_path) and not os.path.lexists(original):
+                        try:
+                            shutil.move(staged_path, original)
+                        except Exception:
+                            error('    -> could not restore staged game directory; it remains at "{}"'.format(staged_path))
+                return False
+
+        # A destination that is another candidate's source is now free. Any
+        # other existing destination is a genuine clash and is preserved in
+        # the orphan area before the staged directory is installed.
+        source_paths = {src for _, src, _ in candidates}
+        for game, src, dst, staged_path in staged:
+            if os.path.lexists(dst) and dst not in source_paths:
+                warn("orphaning destination clash '{}'".format(dst))
+                orphan_dir = _ensure_orphan_directory(savedir, game.folder_name)
+                orphan_path = os.path.join(orphan_dir, game.folder_name)
+                suffix = 1
+                while os.path.lexists(orphan_path):
+                    orphan_path = os.path.join(orphan_dir, '{}({})'.format(game.folder_name, suffix))
+                    suffix += 1
+                shutil.move(dst, orphan_path)
+                orphaned.append((orphan_path, dst))
+
+        # Phase 2: install every staged directory at its final name.
+        for game, src, dst, staged_path in staged:
+            if os.path.lexists(dst):
+                raise OSError('destination still exists: {}'.format(dst))
+            shutil.move(staged_path, dst)
+            committed.append((game, src, dst, staged_path))
+            info('  -> renaming directory "{}" -> "{}"'.format(src, dst))
+
+        for game, _, _, _ in staged:
+            game.old_folder_name = None
+        return bool(staged)
+    except Exception as exc:
+        error('    -> game-directory rename group failed: {}'.format(exc))
+        # Roll back installed destinations to their staging slots first, then
+        # restore every source. Metadata remains pending for a later retry.
+        for _, src, dst, staged_path in reversed(committed):
+            if os.path.lexists(dst) and not os.path.lexists(staged_path):
                 try:
-                    if os.path.exists(dst_dir):
-                        warn("orphaning destination clash '{}'".format(dst_dir))
-                        if not dryrun:
-                            orphan_dir = _ensure_orphan_directory(savedir, game.folder_name)
-                            move_with_increment_on_clash(dst_dir, os.path.join(orphan_dir, game.folder_name))
-                    info('  -> renaming directory "{}" -> "{}"'.format(src_dir, dst_dir))
-                    if not dryrun:
-                        move_with_increment_on_clash(src_dir, dst_dir)
-                        game.old_folder_name = None
-                        have_renamed = True
+                    shutil.move(dst, staged_path)
                 except Exception:
-                    error('    -> rename failed "{}" -> "{}"'.format(game.old_folder_name, game.folder_name))
+                    error('    -> could not roll back game directory "{}"; it remains at "{}"'.format(dst, dst))
+        for _, src, _, staged_path in reversed(staged):
+            if os.path.lexists(staged_path) and not os.path.lexists(src):
+                try:
+                    shutil.move(staged_path, src)
+                except Exception:
+                    error('    -> could not restore game directory; it remains at "{}"'.format(staged_path))
+        for orphan_path, original_path in reversed(orphaned):
+            if os.path.lexists(orphan_path) and not os.path.lexists(original_path):
+                try:
+                    shutil.move(orphan_path, original_path)
+                except Exception:
+                    error('    -> could not restore destination clash; it remains at "{}"'.format(orphan_path))
+        return False
+    finally:
+        try:
+            os.rmdir(staging_root)
+        except OSError:
+            # Retain staged data if rollback itself could not restore it.
+            pass
 
+
+def handle_game_renames(savedir, gamesdb, dryrun, directory_gamesdb=None):
+    """Apply pending game/file renames and report whether the manifest changed.
+
+    Game directories and files are each staged as groups before their
+    destinations are replaced, making swaps and longer rename cycles safe.
+    """
+    import tempfile
+
+    info("scanning manifest for renames...")
+    directory_gamesdb = gamesdb if directory_gamesdb is None else directory_gamesdb
+    have_renamed = _rename_game_directories(savedir, directory_gamesdb, dryrun)
+
+    for game in gamesdb:
+        if not hasattr(game, 'galaxyDownloads'):
+            game.galaxyDownloads = []
+        if not hasattr(game, 'sharedDownloads'):
+            game.sharedDownloads = []
+        if not hasattr(game, 'folder_name'):
+            game.folder_name = game.title
+        if not hasattr(game, 'old_folder_name'):
+            game.old_folder_name = getattr(game, 'old_title', None)
         game_dir = os.path.join(savedir, game.folder_name)
         all_game_files = (game.downloads + game.galaxyDownloads +
                           game.sharedDownloads + game.extras)
@@ -2021,7 +2132,8 @@ def handle_game_renames(savedir, gamesdb, dryrun):
 
 def _handle_game_renames_and_save(savedir, items, dryrun, manifest_items=None):
     """Run rename handling and persist changed state to the complete manifest."""
-    changed = handle_game_renames(savedir, items, dryrun)
+    changed = handle_game_renames(savedir, items, dryrun,
+                                  directory_gamesdb=manifest_items)
     if changed and not dryrun:
         save_manifest(items if manifest_items is None else manifest_items)
     return changed
@@ -4862,6 +4974,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
 
                 item.bg_url = item_json_data['backgroundImage']
                 item.bg_urls = AttrDict()
+                item.bg_urls_complete = True
                 if urlparse(item.bg_url).path != "":
                     item.bg_urls[item.long_title] = item.bg_url
                 item.serial = item_json_data['cdKey']
@@ -5549,136 +5662,225 @@ def _write_serial_file(item, item_homedir):
                     fd_serial.write(item.serial)
 
 
-def _download_image_from_item_key(session,item,key,images_dir_name,image_orphandir,clean_existing):
-    # Refactoring: was a closure inside cmd_download, the session is now a parameter.
-    images_key_dir_name = os.path.join(images_dir_name,key)
-    key_local_path = item[key].lstrip("/") + ".jpg"
-    key_url = 'https://' + key_local_path
-    (dir,file) = os.path.split(key_local_path)
-    key_local_path_dir = os.path.join(images_key_dir_name,dir)
-    key_local_path_file = os.path.join(key_local_path_dir,file)
-    modified_images_key_dir_name = images_key_dir_name
-    if not os.path.exists(key_local_path_file):
-        if os.path.exists(modified_images_key_dir_name):
+def _image_relative_path(image_path):
+    """Return a safe library-relative path for a GOG image URL/path.
+
+    GOG supplies protocol-relative paths such as ``//images.gog.com/...``.
+    The host is intentionally retained as the first directory, as in older
+    library layouts. Reject traversal rather than allowing metadata to escape
+    the game's ``!images`` directory.
+    """
+    if not isinstance(image_path, str):
+        raise ValueError('invalid image path')
+    image_path = image_path.lstrip('/')
+    if not image_path or '\\' in image_path:
+        raise ValueError('invalid image path')
+    parts = image_path.split('/')
+    if any(part in ('', '.', '..') for part in parts):
+        raise ValueError('invalid image path')
+    if re.match(r'^[A-Za-z]:', parts[0]):
+        raise ValueError('invalid image path')
+    return os.path.join(*parts) + '.jpg'
+
+
+def _download_image_atomically(session, image_url, destination):
+    """Download one image to a sibling temporary file and atomically install it.
+
+    The previous destination is never removed before a complete, non-empty
+    response has been written. A failed request or write therefore leaves the
+    old image intact.
+    """
+    destination_dir = os.path.dirname(destination)
+    if not os.path.isdir(destination_dir):
+        os.makedirs(destination_dir)
+    response = None
+    temporary_path = None
+    try:
+        response = request(session, image_url)
+        content = response.content
+        if not content:
+            raise IOError('image response was empty')
+        fd, temporary_path = tempfile.mkstemp(prefix='.gogrepo-image-', suffix='.tmp', dir=destination_dir)
+        with os.fdopen(fd, 'wb') as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, destination)
+        temporary_path = None
+        return True
+    finally:
+        if temporary_path and os.path.exists(temporary_path):
             try:
-                if (clean_existing):
-                    if not os.path.exists(image_orphandir):
+                os.remove(temporary_path)
+            except OSError:
+                warn('could not remove temporary image file %s', temporary_path)
+        if response is not None:
+            close = getattr(response, 'close', None)
+            if close is not None:
+                close()
+
+
+def _prune_image_files(directory, keep_path, image_orphandir, clean_existing):
+    """Remove or orphan old files below one image-key directory after replacement.
+
+    The new image is already installed when this runs. Unknown directories and
+    symlinked directories are deliberately not traversed or removed.
+    """
+    if not os.path.isdir(directory):
+        return
+    keep_path = os.path.normcase(os.path.abspath(keep_path))
+    for current_dir, dirnames, filenames in os.walk(directory, topdown=False, followlinks=False):
+        for filename in filenames:
+            path = os.path.join(current_dir, filename)
+            if os.path.normcase(os.path.abspath(path)) == keep_path:
+                continue
+            try:
+                if clean_existing:
+                    if not os.path.isdir(image_orphandir):
                         os.makedirs(image_orphandir)
-                    move_with_increment_on_clash(modified_images_key_dir_name, image_orphandir)
+                    move_with_increment_on_clash(path, os.path.join(image_orphandir, filename))
                 else:
-                    shutil.rmtree(modified_images_key_dir_name)
-            except Exception as e:
-                error("Could not remove potential old image file, aborting update attempt. Please make sure folder and files are writeable and that nothing is accessing the !image folder")
+                    os.remove(path)
+            except OSError:
+                error('Could not remove potential old image file %s; leaving it in place', path)
                 raise
-        response = request(session,key_url)
-        os.makedirs(key_local_path_dir)
-        with open(key_local_path_file,"wb") as out:
-            out.write(response.content)
+        # Only remove empty real directories. Symlinks are left untouched.
+        for dirname in dirnames:
+            path = os.path.join(current_dir, dirname)
+            if os.path.islink(path):
+                continue
+            try:
+                os.rmdir(path)
+            except OSError:
+                pass
 
 
-def _download_image_from_item_keys(session,item,keys,images_dir_name,image_orphandir,clean_existing):
-    # Refactoring: was a closure inside cmd_download, the session is now a parameter.
-    images_key_dir_name = os.path.join(images_dir_name,keys)
-    images_key_orphandir_name = os.path.join(image_orphandir,keys)
-    if not os.path.exists(images_key_dir_name):
+def _download_image_from_item_key(session, item, key, images_dir_name, image_orphandir, clean_existing):
+    """Download one cover/background image without risking the previous copy."""
+    images_key_dir_name = os.path.join(images_dir_name, key)
+    relative_path = _image_relative_path(item[key])
+    key_url = 'https://' + str(item[key]).lstrip('/') + '.jpg'
+    destination = os.path.join(images_key_dir_name, relative_path)
+    if not (os.path.isfile(destination) and os.path.getsize(destination) > 0):
+        _download_image_atomically(session, key_url, destination)
+    # Prune old versions only after the current destination is known to be usable.
+    _prune_image_files(images_key_dir_name, destination, image_orphandir, clean_existing)
+    return True
+
+
+def _download_image_from_item_keys(session, item, keys, images_dir_name, image_orphandir, clean_existing,
+                                   metadata_complete=False):
+    """Download keyed images and prune stale keys only with complete metadata."""
+    images_key_dir_name = os.path.join(images_dir_name, keys)
+    images_key_orphandir_name = os.path.join(image_orphandir, keys)
+    if not os.path.isdir(images_key_dir_name):
         os.makedirs(images_key_dir_name)
+
     mkeys = item[keys]
-    validPaths = []
-    for key in mkeys.keys():
-        partial_key_local_path = mkeys[key].lstrip("/") + ".jpg"
-        leading_partial_key_local_path = slugify(key,True)
-        leading_partial_key_local_path_dir = os.path.join(images_key_dir_name, leading_partial_key_local_path)
-        validPaths.append(leading_partial_key_local_path)
-        (trailing_partial_key_local_path_dir,trailing_partial_key_local_path_file) =  os.path.split(partial_key_local_path)
-        longpath_safe_leading_partial_key_local_path_dir = leading_partial_key_local_path_dir
-        if not os.path.exists(longpath_safe_leading_partial_key_local_path_dir):
-            os.makedirs(longpath_safe_leading_partial_key_local_path_dir)
-        full_key_local_path_dir = os.path.join(leading_partial_key_local_path_dir,trailing_partial_key_local_path_dir)
-        full_key_local_path_file = os.path.join(full_key_local_path_dir,trailing_partial_key_local_path_file)
-        key_url = 'https://' + partial_key_local_path
-        if not os.path.exists(full_key_local_path_file):
-            if os.path.exists(full_key_local_path_dir):
-                images_full_key_local_path_orphandir = os.path.join(images_key_orphandir_name,leading_partial_key_local_path)
-                try:
-                    if (clean_existing):
-                        if not os.path.exists( images_full_key_local_path_orphandir):
-                            os.makedirs( images_full_key_local_path_orphandir)
-                        move_with_increment_on_clash(full_key_local_path_dir,  images_full_key_local_path_orphandir)
-                    else:
-                        shutil.rmtree(full_key_local_path_dir)
-                except Exception as e:
-                    error("Could not remove potential old image files, aborting update attempt. Please make sure folder and files are writeable and that nothing is accessing the !image folder")
-                    raise
+    valid_paths = set()
+    seen_paths = set()
+    all_downloads_succeeded = True
+    key_dirs_to_prune = []
+    for key, image_path in mkeys.items():
+        leading_path = slugify(key, True)
+        if not leading_path or leading_path in seen_paths:
+            warn('Skipping ambiguous background image key %r', key)
+            all_downloads_succeeded = False
+            continue
+        seen_paths.add(leading_path)
+        valid_paths.add(leading_path)
+        try:
+            relative_path = _image_relative_path(image_path)
+            key_dir = os.path.join(images_key_dir_name, leading_path)
+            destination = os.path.join(key_dir, relative_path)
+            key_url = 'https://' + str(image_path).lstrip('/') + '.jpg'
+            if not (os.path.isfile(destination) and os.path.getsize(destination) > 0):
+                _download_image_atomically(session, key_url, destination)
+            # Defer pruning until every current image has been obtained. A
+            # later failure must not leave a partially cleaned image set.
+            key_dirs_to_prune.append((key_dir, destination, leading_path))
+        except requests.HTTPError:
+            error('Could not download background image %s', image_path)
+            all_downloads_succeeded = False
+        except Exception:
+            all_downloads_succeeded = False
+            raise
+
+    # An absent key is evidence of removal only when the detail response was
+    # explicitly marked complete. If any current image failed, retain all old
+    # keys as well: a partial refresh must not trigger broad cleanup.
+    if metadata_complete and all_downloads_succeeded:
+        for key_dir, destination, leading_path in key_dirs_to_prune:
+            _prune_image_files(key_dir, destination, os.path.join(images_key_orphandir_name, leading_path), clean_existing)
+        for potential_old_folder in sorted(os.listdir(images_key_dir_name)):
+            if potential_old_folder in valid_paths:
+                continue
+            potential_old_folder_path = os.path.join(images_key_dir_name, potential_old_folder)
+            if os.path.islink(potential_old_folder_path):
+                continue
             try:
-                response = request(session,key_url)
-                os.makedirs(full_key_local_path_dir)
-                with open(full_key_local_path_file,"wb") as out:
-                    out.write(response.content)
-            except requests.HTTPError:
-                error('Could not download background image ' + full_key_local_path_file)
-    for potential_old_folder in sorted(os.listdir(images_key_dir_name)):
-        if potential_old_folder not in validPaths:
-            potential_old_folder_path = os.path.join(images_key_dir_name,potential_old_folder)
-            try:
-                if (clean_existing):
-                    if not os.path.exists(images_key_orphandir_name):
+                if clean_existing:
+                    if not os.path.isdir(images_key_orphandir_name):
                         os.makedirs(images_key_orphandir_name)
                     move_with_increment_on_clash(potential_old_folder_path, images_key_orphandir_name)
-                else:
+                elif os.path.isdir(potential_old_folder_path):
                     shutil.rmtree(potential_old_folder_path)
-            except Exception as e:
-                error("Could not remove potential old image files, aborting update attempt. Please make sure folder and files are writeable and that nothing is accessing the !image folder")
+                else:
+                    os.remove(potential_old_folder_path)
+            except OSError:
+                error('Could not remove potential old image files, aborting update attempt. Please make sure folder and files are writeable and that nothing is accessing the !image folder')
                 raise
+    return all_downloads_succeeded
 
 
 def _download_item_images(session, item, item_homedir, item_orphandir, backgrounds, covers, clean_old_images):
-    """Download the cover and background images of a game into its !images folder."""
+    """Download a game's images, preserving old copies until replacements succeed."""
     images_dir_name = os.path.join(item_homedir, IMAGES_DIR_NAME)
-    image_orphandir = os.path.join(item_orphandir,IMAGES_DIR_NAME)
-
-    if not os.path.exists(images_dir_name):
+    image_orphandir = os.path.join(item_orphandir, IMAGES_DIR_NAME)
+    if not os.path.isdir(images_dir_name):
         os.makedirs(images_dir_name)
-    try:
-        if len(item.bg_urls) != 0 and backgrounds:
-            images_old_bg_url_dir_name = os.path.join(images_dir_name,"bg_url")
-            modified_image_orphandir =  image_orphandir
-            if os.path.exists(images_old_bg_url_dir_name):
-                try:
-                    if (clean_old_images):
-                        if not os.path.exists( modified_image_orphandir):
-                            os.makedirs( modified_image_orphandir)
-                        move_with_increment_on_clash(images_old_bg_url_dir_name , modified_image_orphandir)
-                    else:
-                        shutil.rmtree(images_old_bg_url_dir_name )
-                except Exception as e:
-                    error("Could not delete potential old bg_url files, aborting update attempt. Please make sure folder and files are writeable and that nothing is accessing the !image folder")
-                    raise
-            try:
-                _download_image_from_item_keys(session,item,"bg_urls",images_dir_name,image_orphandir,clean_old_images)
-            except KeyboardInterrupt:
-                warn("Interrupted during download of background image(s)")
-                raise
-            except Exception:
-                warn("Could not download background image")
 
-    except AttributeError:
-        if item.bg_url != '' and backgrounds:
-            try:
-                _download_image_from_item_key(session,item,"bg_url",images_dir_name,image_orphandir,clean_old_images)
-            except KeyboardInterrupt:
-                warn("Interrupted during download of background image")
-                raise
-            except Exception:
-                warn("Could not download background image")
-
-    if item.image_url != '' and covers:
+    if backgrounds:
         try:
-            _download_image_from_item_key(session,item,"image_url",images_dir_name,image_orphandir,clean_old_images)
+            bg_urls = getattr(item, 'bg_urls', None)
+            complete = bool(getattr(item, 'bg_urls_complete', False))
+            if bg_urls is not None and (bg_urls or complete):
+                backgrounds_ok = _download_image_from_item_keys(
+                    session, item, 'bg_urls', images_dir_name, image_orphandir,
+                    clean_old_images, metadata_complete=complete)
+                # The old singular layout is obsolete only after all current
+                # backgrounds have been obtained and the metadata is complete.
+                if backgrounds_ok and complete:
+                    old_bg_dir = os.path.join(images_dir_name, 'bg_url')
+                    if os.path.exists(old_bg_dir) and not os.path.islink(old_bg_dir):
+                        if clean_old_images:
+                            if not os.path.isdir(image_orphandir):
+                                os.makedirs(image_orphandir)
+                            move_with_increment_on_clash(old_bg_dir, image_orphandir)
+                        else:
+                            shutil.rmtree(old_bg_dir)
+            else:
+                bg_url = getattr(item, 'bg_url', '')
+                if bg_url:
+                    _download_image_from_item_key(session, item, 'bg_url', images_dir_name,
+                                                  image_orphandir, clean_old_images)
         except KeyboardInterrupt:
-            warn("Interrupted during download of cover image")
+            warn('Interrupted during download of background image(s)')
             raise
         except Exception:
-            warn("Could not download cover image")
+            warn('Could not download background image')
+
+    if covers:
+        try:
+            image_url = getattr(item, 'image_url', '')
+            if image_url:
+                _download_image_from_item_key(session, item, 'image_url', images_dir_name,
+                                              image_orphandir, clean_old_images)
+        except KeyboardInterrupt:
+            warn('Interrupted during download of cover image')
+            raise
+        except Exception:
+            warn('Could not download cover image')
 
 
 def _queue_item_downloads(job, item, game_items, item_homedir, item_downloaddir, item_provisionaldir, skipfiles, all_items):
