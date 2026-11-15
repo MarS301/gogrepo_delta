@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.62'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.64'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -503,6 +503,8 @@ LANG_TABLE = {'en': 'English',   # English
               }
 
 VALID_OS_TYPES = ['windows', 'linux', 'mac']
+MOVIE_OS_TYPE = 'video'              # the os_type of the files of a movie: they belong to no operating system
+MOVIE_FOLDER_SUFFIX = '-movie'       # added to the folder name of a movie, so that movies are recognised in the library folder
 VALID_LANG_TYPES = list(LANG_TABLE.keys())
 
 lineSep = "\n"
@@ -600,6 +602,120 @@ def detect_lang():
             return code, label
     return DEFAULT_FALLBACK_LANG, 'fallback'
 
+def media_of(item):
+    """GOG_MEDIA_TYPE_GAME or GOG_MEDIA_TYPE_MOVIE of a manifest item (items of old manifests have no media_type: games)."""
+    return str(getattr(item, 'media_type', None) or GOG_MEDIA_TYPE_GAME)
+
+
+def os_selected(entry, os_list):
+    """True if a file entry belongs to one of the operating systems in os_list. The files of a movie (os_type 'video') belong to none and
+    to all: a movie is chosen when the manifest is made (update -movies), never by -os."""
+    return entry.os_type == MOVIE_OS_TYPE or entry.os_type in os_list
+
+
+def parse_size_text(text):
+    """Bytes of a size as GOG's details show it ('1.4 GB', '675 MB'), 0 if it cannot be read."""
+    match = re.match(r'^\s*([0-9]+(?:[.,][0-9]+)?)\s*([KMGT]?B)\s*$', str(text or ''), re.IGNORECASE)
+    if not match:
+        return 0
+    return int(float(match.group(1).replace(',', '.')) * 1024 ** {'B': 0, 'KB': 1, 'MB': 2, 'GB': 3, 'TB': 4}[match.group(2).upper()])
+
+
+def movie_quality_rank(label):
+    """A number to order the quality labels of GOG's movies: 1080p is 1080, 4k is 2160, dvd is taken as 576; 0 for a label that is not known."""
+    label = (label or '').strip().lower()
+    match = re.fullmatch(r'(\d{3,4})p', label)
+    if match:
+        return int(match.group(1))
+    match = re.fullmatch(r'(\d+)k', label)
+    if match:
+        return {'2': 1440, '4': 2160, '8': 4320}.get(match.group(1), 0)
+    return 576 if label == 'dvd' else 0
+
+
+def parse_movie_quality(text):
+    """The -moviequality value as a list of tokens, in the order of preference: 'best', 'all', 'max:<quality>' (the best that is not above
+    that quality) or a quality name such as '1080p', '720p', 'dvd'. Raises ValueError with the reason for a value that makes no sense."""
+    tokens = [part.strip().lower() for part in str(text if text is not None else '').split(',') if part.strip()]
+    if not tokens:
+        raise ValueError("-moviequality needs a value, for example best, all, 1080p or 1080p,720p")
+    for token in tokens:
+        if token in ('best', 'all'):
+            continue
+        if token.startswith('max:'):
+            if movie_quality_rank(token[4:]) <= 0:
+                raise ValueError("-moviequality %s: '%s' is not a quality I can compare (use for example 1080p, 720p, 4k)" % (token, token[4:]))
+        elif not re.fullmatch(r'[a-z0-9]+', token):
+            raise ValueError("-moviequality: '%s' is not a quality name (use for example best, all, 1080p, 720p, dvd, max:1080p)" % token)
+    return tokens
+
+
+def choose_movie_videos(videos, tokens):
+    """(chosen, fell_back): the video variants (dicts with 'label', 'rank', 'size_bytes') that the tokens ask for. The tokens are tried in order and
+    the first that finds something decides; if none does, the best variant is taken (a movie is never left without its video)."""
+    if not videos:
+        return [], False
+    def best(candidates):
+        return max(candidates, key=lambda video: (video['rank'], video['size_bytes']))
+    for token in tokens:
+        if token == 'all':
+            return list(videos), False
+        if token == 'best':
+            return [best(videos)], False
+        if token.startswith('max:'):
+            limit = movie_quality_rank(token[4:])
+            fitting = [video for video in videos if 0 < video['rank'] <= limit]
+            if fitting:
+                return [best(fitting)], False
+        else:
+            same = [video for video in videos if video['label'] == token]
+            if same:
+                return same, False
+    return [best(videos)], True
+
+
+MOVIE_FILE_KEY = re.compile(r'^(?P<lang>[a-z]+?)\d+(?P<kind>[a-z]+)\d*$')      # the last part of a movie file's address: en1video1, en1patch1
+
+
+def prepare_movie_downloads(raw_downloads, lang_list, quality_tokens, title=''):
+    """Turns the flat `downloads` list of a movie's details (dicts with manualUrl, name, size) into the structure of a game
+    ([[language name, {os type: [downloads]}]]), so that filter_downloads does the rest, and chooses what to take: the wanted languages (English if
+    the movie has none of them, any language if it has no English either) and, of the video variants (the ones named like 'Title (1080p)'), those
+    that quality_tokens ask for. Everything that is not a video, such as the subtitles, is always taken. Returns (downloads, language codes)."""
+    groups, order = {}, []
+    for entry in raw_downloads or []:
+        match = MOVIE_FILE_KEY.match(str(entry.get('manualUrl', '')).rstrip('/').rsplit('/', 1)[-1])
+        code, kind = (match.group('lang'), match.group('kind')) if match else ('en', 'other')
+        if code not in LANG_TABLE:
+            warn("movie '%s': a file with the unknown language code '%s' is skipped" % (title, code))
+            continue
+        if code not in groups:
+            groups[code] = []
+            order.append(code)
+        groups[code].append((kind, entry))
+    if not order:
+        return [], []
+    chosen_codes = [code for code in order if code in lang_list]
+    if not chosen_codes:
+        chosen_codes = ['en'] if 'en' in order else list(order)
+        info("movie '%s' is not offered in the wanted language(s): taking %s" % (title, ', '.join(LANG_TABLE[code] for code in chosen_codes)))
+    result = []
+    for code in chosen_codes:
+        videos = []
+        for kind, entry in groups[code]:
+            if kind == 'video':
+                label = re.search(r'\(([^()]*)\)\s*$', str(entry.get('name', '')))
+                label = label.group(1).strip().lower() if label else ''
+                videos.append({'entry': entry, 'label': label, 'rank': movie_quality_rank(label), 'size_bytes': parse_size_text(entry.get('size'))})
+        chosen, fell_back = choose_movie_videos(videos, quality_tokens)
+        if fell_back:
+            info("movie '%s': none of the wanted qualities is offered, taking the best (%s)" % (title, chosen[0]['label'] or chosen[0]['entry'].get('name')))
+        keep = set(id(video['entry']) for video in chosen)
+        files = [dict(entry, version='') for kind, entry in groups[code] if kind != 'video' or id(entry) in keep]
+        result.append([LANG_TABLE[code], {MOVIE_OS_TYPE: files}])
+    return result, chosen_codes
+
+
 def filter_languages(entries, valid_langs, fallback_lang=None):
     """Entries (objects with .lang and .os_type) that are in one of valid_langs.
 
@@ -608,10 +724,10 @@ def filter_languages(entries, valid_langs, fallback_lang=None):
     Linux installer still gives you that installer when you asked for German, while a game that has a German
     installer gives you only the German one. Used for the default language; an explicit -lang stays strict."""
     if not fallback_lang:
-        return [entry for entry in entries if entry.lang in valid_langs]
+        return [entry for entry in entries if entry.lang in valid_langs or entry.os_type == MOVIE_OS_TYPE]     # a movie's language was chosen when the manifest was made
     covered = set(entry.os_type for entry in entries if entry.lang in valid_langs)
     return [entry for entry in entries
-            if entry.lang in valid_langs or (entry.lang == fallback_lang and entry.os_type not in covered)]
+            if entry.os_type == MOVIE_OS_TYPE or entry.lang in valid_langs or (entry.lang == fallback_lang and entry.os_type not in covered)]
 
 def apply_os_lang_defaults(args):
     """Fill in args.os and args.lang for the commands that filter by operating system and language.
@@ -3105,7 +3221,7 @@ def _pad(text, width, right=False):
     return gap + text if right else text + gap
 
 
-LIST_OS_NAMES = {'windows': 'win', 'linux': 'lin', 'mac': 'mac'}
+LIST_OS_NAMES = {'windows': 'win', 'linux': 'lin', 'mac': 'mac', MOVIE_OS_TYPE: 'vid'}
 
 
 def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_format='table'):
@@ -3161,19 +3277,20 @@ def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_forma
             installers, extras = files_of[id(game)]
             everything = installers + extras
             rows.append((str(game.id), game.title, getattr(game, 'long_title', game.title),
+                         'movie' if media_of(game) == GOG_MEDIA_TYPE_MOVIE else 'game',
                          ','.join(LIST_OS_NAMES.get(o, o) for o in sorted(set(e.os_type for e in installers))) or '-',
                          ','.join(sorted(code_of.get(l, l) for l in set(e.lang for e in installers))) or '-',
                          str(len(everything)), pretty_size(sum(getattr(e, 'size', 0) or 0 for e in everything))))
-        header = ('ID', 'TITLE', 'NAME', 'OS', 'LANG', 'FILES', 'SIZE')
-        widths = [max(_display_width(r[i]) for r in rows + [header]) for i in range(7)]
+        header = ('ID', 'TITLE', 'NAME', 'MEDIA', 'OS', 'LANG', 'FILES', 'SIZE')
+        widths = [max(_display_width(r[i]) for r in rows + [header]) for i in range(8)]
         if sys.stdout.isatty():                                      # on a screen: make it fit (the name first, then the title)
-            room = shutil.get_terminal_size((120, 24)).columns - 1 - 2 * 6
+            room = shutil.get_terminal_size((120, 24)).columns - 1 - 2 * 7
             for column in (2, 1):
                 over = sum(widths) - room
                 if over > 0:
                     widths[column] = max(12, widths[column] - over)
         for row in [header] + rows:
-            cells = [_pad(_fit(row[i], widths[i]), widths[i], right=i in (0, 5, 6)) for i in range(7)]
+            cells = [_pad(_fit(row[i], widths[i]), widths[i], right=i in (0, 6, 7)) for i in range(8)]
             print('  '.join(cells).rstrip())
     info('%d of %d games' % (len(found), len(items)))
 
@@ -3217,6 +3334,8 @@ def build_parser():
     g5.add_argument('-skipids', action='store', help='id(s)/titles(s) of (a) specific game(s) not to update', nargs='*', default=[])
     g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
     g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
+    g1.add_argument('-movies', action='store_true', help='also put your GOG movies into the manifest (opt-in: a movie can be many gigabytes). Movies are not chosen by -os; without this switch an update leaves the movies of the manifest as they are')
+    g1.add_argument('-moviequality', action='store', default='best', help='which video variants of a movie to take: best (the highest resolution, the default), all, a quality such as 1080p or 720p or dvd, max:<quality> (the best that is not above it, e.g. max:1080p), or a list in the order of preference (1080p,720p); if none of the listed is offered the best is taken. Subtitles are always taken')
     g1.add_argument('-wait', action='store', type=float,
                     help='wait this long in hours before starting', default=0.0)  # sleep in hr
     g1.add_argument('-diagnostic', action='store_true', help = "More exhaustively probes GOG for data in preparation for the diagnostics command. This causes slower updates and will generate more warning messages. ")
@@ -3619,6 +3738,8 @@ CONFIG_NOTES = [
     (None, (('output', 'file to write'),
             ('delimiter', "column separator (default ';'; ',' for English, Japanese, Chinese, Korean, Thai and Hebrew)"))),
     (('selfupdate',), (('check', 'only check whether a newer release exists; nothing is downloaded or installed (the only thing the command does)'),)),
+    (('update',), (('movies', 'also put the GOG movies into the manifest (opt-in; without it an update leaves the movies of the manifest as they are)'),
+                   ('moviequality', 'the video variants of a movie to take: best, all, a quality (1080p), max:<quality> (max:1080p) or a list in order of preference (1080p,720p)'))),
     (('clean',), (('orphans', 'move files and folders not in the manifest to !orphaned (default when no other stage is given; not together with trash)'),
                   ('partials', 'delete the unfinished downloads in !downloading'),
                   ('provisional', 'delete the finished files waiting in !downloading/!provisional'),
@@ -3825,6 +3946,12 @@ def process_argv(argv):
 
     if args.command in ('update', 'download', 'backup', 'import', 'verify', 'list'):
         validate_lang_and_os(args)
+
+    if args.command == 'update':
+        try:
+            parse_movie_quality(args.moviequality)
+        except ValueError as e:
+            sp1.choices['update'].error(str(e))
 
     if args.command == 'clean':
         problem = clean_option_problem(args)
@@ -4341,7 +4468,7 @@ def update_narrowing(gamesdb, os_list, lang_list, lang_fallback, ids, skipids):
         return result
     valid_langs = [LANG_TABLE[lang] for lang in lang_list]
     fallback_name = LANG_TABLE[lang_fallback] if lang_fallback else None
-    games = gamesdb
+    games = [game for game in gamesdb if media_of(game) != GOG_MEDIA_TYPE_MOVIE]      # movies are not chosen by -os or -lang
     if ids:
         selected = resolve_game_ids(gamesdb, ids).selected
         games = [game for game in games if game.id in selected]
@@ -4385,8 +4512,9 @@ def warn_if_update_narrows_manifest(gamesdb, os_list, lang_list, lang_fallback, 
          '(-os, -lang), or put them into the config file.')
 
 
-def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,diagnostic,lang_fallback=None,tags=None,skiptags=None):
+def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,diagnostic,lang_fallback=None,tags=None,skiptags=None,movies=False,moviequality='best'):
     media_type = GOG_MEDIA_TYPE_GAME
+    quality_tokens = parse_movie_quality(moviequality)
     tags, skiptags = list(tags or []), list(skiptags or [])    # entry 39: -tags / -skiptags (names of the tags of your GOG library)
     tag_wanted, tag_unwanted = tag_keys(tags), tag_keys(skiptags)
     tag_filter = bool(tags or skiptags)
@@ -4491,6 +4619,9 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
            md5xmls = resumeprops['md5xmls']
         except KeyError:
             md5xmls = True
+        movies = resumeprops.get('movies', False)                     # old resume files: no movies
+        moviequality = resumeprops.get('moviequality', 'best')
+        quality_tokens = parse_movie_quality(moviequality)
         try:
             noChangeLogs = resumeprops['noChangeLogs']
         except KeyError:
@@ -4524,103 +4655,110 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         warn_if_update_narrows_manifest(gamesdb, os_list, lang_list, lang_fallback, narrow_ids, narrow_skipids, partial)
         known_by_id = dict((game.id, game) for game in gamesdb)
 
-        # Fetch shelf data
-        done = False
-        while not done:
-            i += 1  # starts at page 1
-            if i == 1:
-                info('fetching game product data (page %d)...' % i)
-            else:
-                info('fetching game product data (page %d / %d)...' % (i, json_data['totalPages']))
-            data_response = request(updateSession,api_url,args={'mediaType': media_type,'sortBy': 'title','page': str(i)})
-#            with open("text.html","w+",encoding='utf-8') as f:
-#                f.write(data_response.text)
-            try:
-                json_data = data_response.json()
-            except ValueError:
-                error('failed to load product data (are you still logged in?)')
-                raise SystemExit(1)
+        # Fetch shelf data: the games, and with -movies the movies after them
+        media_types = [GOG_MEDIA_TYPE_GAME] + ([GOG_MEDIA_TYPE_MOVIE] if movies else [])
+        all_pages_complete = True
+        for media_type in media_types:
+            if media_type == GOG_MEDIA_TYPE_MOVIE and idsOriginal and not ids:
+                break                           # every game that was asked for with -ids has been found: no movie is wanted
+            what = 'movie' if media_type == GOG_MEDIA_TYPE_MOVIE else 'game'
+            i, done, pages_complete = 0, False, False
+            while not done:
+                i += 1  # starts at page 1
+                if i == 1:
+                    info('fetching %s product data (page %d)...' % (what, i))
+                else:
+                    info('fetching %s product data (page %d / %d)...' % (what, i, json_data['totalPages']))
+                data_response = request(updateSession,api_url,args={'mediaType': media_type,'sortBy': 'title','page': str(i)})
+    #            with open("text.html","w+",encoding='utf-8') as f:
+    #                f.write(data_response.text)
+                try:
+                    json_data = data_response.json()
+                except ValueError:
+                    error('failed to load product data (are you still logged in?)')
+                    raise SystemExit(1)
 
-            tag_map = tag_map_of(json_data)
-            known_tag_keys.update(tag_key(name) for name in tag_map.values())
-            # Parse out the interesting fields and add to items dict
-            for item_json_data in json_data['products']:
-                # skip games marked as hidden
-                if skipHidden and (item_json_data.get('isHidden', False) is True):
-                    continue
+                tag_map = tag_map_of(json_data)
+                known_tag_keys.update(tag_key(name) for name in tag_map.values())
+                # Parse out the interesting fields and add to items dict
+                for item_json_data in json_data['products']:
+                    # skip games marked as hidden
+                    if skipHidden and (item_json_data.get('isHidden', False) is True):
+                        continue
 
-                item = AttrDict()
-                item.id = item_json_data['id']
-                item.title = item_json_data['slug']
-                item.folder_name = item_json_data['slug']
-                item.long_title = item_json_data['title']
+                    item = AttrDict()
+                    item.id = item_json_data['id']
+                    item.title = item_json_data['slug']
+                    item.folder_name = item_json_data['slug'] + (MOVIE_FOLDER_SUFFIX if media_type == GOG_MEDIA_TYPE_MOVIE else '')
+                    item.long_title = item_json_data['title']
 
-                item.genre = item_json_data['category']
-                item.image_url = item_json_data['image']
-                #item.image_urls[item.long_title] = item_json_data['image']
-                item.store_url = item_json_data['url']
-                item.media_type = media_type
-                item.rating = item_json_data['rating']
-                item.has_updates = bool(item_json_data['updates'])
-                item.old_title = None
-                #mirror these so they appear at the top of the json entry
-                item._title_mirror =  item.title
-                item._long_title_mirror = item.long_title
-                item._id_mirror =  item.id
-
-
-                # entry 39: the tag names of this game; the manifest entry of a game that is not fetched again gets them too
-                item.tag_names = product_tag_names(item_json_data, tag_map)
-                known_game = known_by_id.get(item.id)
-                if known_game is not None and getattr(known_game, 'tag_names', None) != item.tag_names:
-                    known_game.tag_names = list(item.tag_names)
-                    tags_refreshed += 1
-
-                item.gog_data = AttrDict()
-                for key in item_json_data:
-                    try:
-                        tmp_contents = item[key]
-                        if tmp_contents != item_json_data[key]:
-                            debug("GOG Data Key, %s , for item clashes with Item Data Key storing detailed info in secondary dict" % key)
-                            item.gog_data[key] = item_json_data[key]
-                    except Exception:
-                        item[key] = item_json_data[key]
+                    item.genre = item_json_data['category']
+                    item.image_url = item_json_data['image']
+                    #item.image_urls[item.long_title] = item_json_data['image']
+                    item.store_url = item_json_data['url']
+                    item.media_type = media_type
+                    item.rating = item_json_data['rating']
+                    item.has_updates = bool(item_json_data['updates'])
+                    item.old_title = None
+                    #mirror these so they appear at the top of the json entry
+                    item._title_mirror =  item.title
+                    item._long_title_mirror = item.long_title
+                    item._id_mirror =  item.id
 
 
-                if not done:
-                    if item.title not in skipids and str(item.id) not in skipids:
-                        if ids:
-                            if (item.title  in ids or str(item.id) in ids):  # support by game title or gog id
-                                info('scanning found "{}" in product data!'.format(item.title))
-                                try:
-                                    ids.remove(item.title)
-                                except ValueError:
+                    # entry 39: the tag names of this game; the manifest entry of a game that is not fetched again gets them too
+                    item.tag_names = product_tag_names(item_json_data, tag_map)
+                    known_game = known_by_id.get(item.id)
+                    if known_game is not None and getattr(known_game, 'tag_names', None) != item.tag_names:
+                        known_game.tag_names = list(item.tag_names)
+                        tags_refreshed += 1
+
+                    item.gog_data = AttrDict()
+                    for key in item_json_data:
+                        try:
+                            tmp_contents = item[key]
+                            if tmp_contents != item_json_data[key]:
+                                debug("GOG Data Key, %s , for item clashes with Item Data Key storing detailed info in secondary dict" % key)
+                                item.gog_data[key] = item_json_data[key]
+                        except Exception:
+                            item[key] = item_json_data[key]
+
+
+                    if not done:
+                        if item.title not in skipids and str(item.id) not in skipids:
+                            if ids:
+                                if (item.title  in ids or str(item.id) in ids):  # support by game title or gog id
+                                    info('scanning found "{}" in product data!'.format(item.title))
                                     try:
-                                        ids.remove(str(item.id))
+                                        ids.remove(item.title)
                                     except ValueError:
-                                        warn("Somehow we have matched an unspecified ID. Huh ?")
-                                if not ids:
-                                    done = True
-                            else:
+                                        try:
+                                            ids.remove(str(item.id))
+                                        except ValueError:
+                                            warn("Somehow we have matched an unspecified ID. Huh ?")
+                                    if not ids:
+                                        done = True
+                                else:
+                                    continue
+
+
+                            if tag_wanted and not game_has_any_tag(item, tag_wanted):
+                                continue                # not one of the tagged games
+                            if tag_unwanted and game_has_any_tag(item, tag_unwanted):
+                                info('skipping "{}" (has a tag from -skiptags)'.format(item.title))
+                                tag_skipped_count += 1
                                 continue
+                            if (not partial) or (updateonly and item.has_updates) or (skipknown and item.id not in known_ids):
+                                 items.append(item)
+                        else:
+                            info('skipping "{}" found in product data!'.format(item.title))
 
 
-                        if tag_wanted and not game_has_any_tag(item, tag_wanted):
-                            continue                # not one of the tagged games
-                        if tag_unwanted and game_has_any_tag(item, tag_unwanted):
-                            info('skipping "{}" (has a tag from -skiptags)'.format(item.title))
-                            tag_skipped_count += 1
-                            continue
-                        if (not partial) or (updateonly and item.has_updates) or (skipknown and item.id not in known_ids):
-                             items.append(item)
-                    else:
-                        info('skipping "{}" found in product data!'.format(item.title))
-
-
-            if i >= json_data['totalPages']:
-                done = True
-                pages_complete = True
-
+                if i >= json_data['totalPages']:
+                    done = True
+                    pages_complete = True
+            all_pages_complete = all_pages_complete and pages_complete
+        pages_complete = all_pages_complete
 
         if tags_refreshed:
             info('the tags of %d game(s) in the manifest were refreshed' % tags_refreshed)
@@ -4634,7 +4772,10 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
 
         if not idsOriginal and not tag_filter and not updateonly and not skipknown:     # a run limited by -ids or tags never removes games
             validIDs = [item.id for item in items]
-            invalidItems = [itemID for itemID in known_ids if itemID not in validIDs and str(itemID) not in skipids]
+            left_alone = [] if movies else [game.id for game in gamesdb if media_of(game) == GOG_MEDIA_TYPE_MOVIE]     # not looked at, so not removed
+            if left_alone:
+                info('%d movie(s) in the manifest are left as they are: this update is without -movies' % len(left_alone))
+            invalidItems = [itemID for itemID in known_ids if itemID not in validIDs and str(itemID) not in skipids and itemID not in left_alone]
             if len(invalidItems) != 0:
                 warn('old games in manifest. Removing ...')
                 for item in invalidItems:
@@ -4694,7 +4835,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
     # fetch item details
     i = 0
     resumedb = sorted(items, key=lambda item: item.title)
-    resumeprop = {'resume_manifest_syntax_version':RESUME_MANIFEST_SYNTAX_VERSION,'os_list':os_list,'lang_list':lang_list,'lang_fallback':lang_fallback,'installers':installers,'strict':strict,'complete':False,'skipknown':skipknown,'partial':partial,'updateonly':updateonly,'strictDupe':strictDupe,'strictDownloadsUpdate':strictDownloadsUpdate,'strictExtrasUpdate':strictExtrasUpdate,'md5xmls':md5xmls,'noChangeLogs':noChangeLogs,'diagnostic':diagnostic}
+    resumeprop = {'resume_manifest_syntax_version':RESUME_MANIFEST_SYNTAX_VERSION,'os_list':os_list,'lang_list':lang_list,'lang_fallback':lang_fallback,'installers':installers,'strict':strict,'complete':False,'skipknown':skipknown,'partial':partial,'updateonly':updateonly,'strictDupe':strictDupe,'strictDownloadsUpdate':strictDownloadsUpdate,'strictExtrasUpdate':strictExtrasUpdate,'md5xmls':md5xmls,'movies':movies,'moviequality':moviequality,'noChangeLogs':noChangeLogs,'diagnostic':diagnostic}
     resumedb.append(resumeprop)
     save_resume_manifest(resumedb)
 
@@ -4702,7 +4843,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
     try:
         for item in sorted(items, key=lambda item: item.title):
             api_url  = GOG_ACCOUNT_URL
-            api_url += "/gameDetails/{}.json".format(item.id)
+            api_url += ("/movieDetails/{}.json" if media_of(item) == GOG_MEDIA_TYPE_MOVIE else "/gameDetails/{}.json").format(item.id)
 
 
 
@@ -4714,6 +4855,10 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 response = request(updateSession,api_url)
 
                 item_json_data = response.json()
+                is_movie = media_of(item) == GOG_MEDIA_TYPE_MOVIE
+                if is_movie:        # a movie's downloads are a flat list: make them look like a game's, with the wanted language and qualities only
+                    item_json_data['downloads'], movie_lang_list = prepare_movie_downloads(item_json_data.get('downloads'), lang_list, quality_tokens, item.long_title)
+                dl_langs, dl_os, dl_fallback = (movie_lang_list, [MOVIE_OS_TYPE], None) if is_movie else (lang_list, os_list, lang_fallback)
 
                 item.bg_url = item_json_data['backgroundImage']
                 item.bg_urls = AttrDict()
@@ -4772,10 +4917,10 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 item.available_langs[item.long_title] = available_langs
                 item.available_os_types = AttrDict()
                 item.available_os_types[item.long_title] = available_os_types
-                filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession,product_api_context,diagnostic,lang_fallback)
-                filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession,product_api_context,diagnostic,lang_fallback)
+                filter_downloads(item.downloads, item_json_data['downloads'], dl_langs, dl_os,md5xmls,updateSession,product_api_context,diagnostic,dl_fallback)
+                filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], dl_langs, dl_os,md5xmls,updateSession,product_api_context,diagnostic,dl_fallback)
                 filter_extras(item.extras, item_json_data['extras'],md5xmls,updateSession,product_api_context,diagnostic)
-                filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession,product_api_context,diagnostic,lang_fallback)
+                filter_dlcs(item, item_json_data['dlcs'], dl_langs, dl_os,md5xmls,updateSession,product_api_context,diagnostic,dl_fallback)
 
 
                 #Indepent Deduplication to make sure there are no doubles within galaxyDownloads or downloads to avoid weird stuff with the comprehention.
@@ -4783,7 +4928,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 item.galaxyDownloads = deDuplicateList(item.galaxyDownloads,{},strictDupe)
 
                 item.sharedDownloads = [x for x in item.downloads if x in item.galaxyDownloads]
-                if (installers=='galaxy'):
+                if (installers=='galaxy' and not is_movie):
                     item.downloads = []
                 else:
                     item.downloads = [x for x in item.downloads if x not in item.sharedDownloads]
@@ -5053,7 +5198,7 @@ def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipga
         for game_item in downloads+galaxyDownloads+sharedDownloads:
             if game_item.md5 is not None:
                 if id(game_item) in language_ok:
-                    if game_item.os_type in os_list:
+                    if os_selected(game_item, os_list):
                         try:
                             md5_info = size_info[game_item.size]
                         except KeyError:
@@ -5317,13 +5462,13 @@ def _item_download_lists(item, skipextras, skipstandalone, skipgalaxy, skipshare
         filtered_sharedDownloads = []
 
 
-    downloadsOS = [game_item for game_item in filtered_downloads if game_item.os_type in os_list]
+    downloadsOS = [game_item for game_item in filtered_downloads if os_selected(game_item, os_list)]
     filtered_downloads= downloadsOS
 
-    downloadsOS = [game_item for game_item in filtered_galaxyDownloads if game_item.os_type in os_list]
+    downloadsOS = [game_item for game_item in filtered_galaxyDownloads if os_selected(game_item, os_list)]
     filtered_galaxyDownloads = downloadsOS
 
-    downloadsOS = [game_item for game_item in  filtered_sharedDownloads if game_item.os_type in os_list]
+    downloadsOS = [game_item for game_item in  filtered_sharedDownloads if os_selected(game_item, os_list)]
     filtered_sharedDownloads = downloadsOS
 
 
@@ -6248,14 +6393,25 @@ def split_update_time(text):
 def cmd_export(output='gog-library.csv', savedir=None, delimiter=None):
     """Write the manifest as a CSV spreadsheet, one row per file (installers, galaxy installers, shared files and extras).
     With savedir an extra column says whether each file exists there with the right size (no checksums are computed)."""
+    problem = file_write_problem(output)                  # before anything is read: a CSV file that is open in Excel cannot be written
+    if problem is not None:
+        error(file_write_message(output, problem))
+        run_report.fail('csv', 'file cannot be written')
+        return
     items = load_manifest()
     delimiter = delimiter or default_csv_delimiter()
-    columns = ['game id', 'title', 'folder', 'kind', 'file', 'operating system', 'language', 'version', 'size (bytes)', 'size', 'md5', 'update date', 'update time (UTC)']
+    columns = ['game id', 'title', 'media', 'folder', 'kind', 'file', 'operating system', 'language', 'version', 'size (bytes)', 'size', 'md5', 'update date', 'update time (UTC)']
     if savedir:
         columns.append('on disk')
     rows = 0
     # utf-8 with a byte order mark so that Excel shows umlauts and other special characters correctly
-    with open(output, 'w', encoding='utf-8-sig', newline='') as f:
+    try:                                                   # the check above can pass and the opening still fail (the file was opened meanwhile)
+        out = open(output, 'w', encoding='utf-8-sig', newline='')
+    except OSError as e:
+        error(file_write_message(output, e))
+        run_report.fail('csv', 'file cannot be written')
+        return
+    with out as f:
         writer = csv.writer(f, delimiter=delimiter)
         writer.writerow(columns)
         for item in sorted(items, key=lambda i: str(i.get('folder_name') or i.get('title') or '').lower()):
@@ -6265,7 +6421,7 @@ def cmd_export(output='gog-library.csv', savedir=None, delimiter=None):
                 for entry in entries:
                     size = entry.get('size')
                     update_date, update_time = split_update_time(entry.get('updated'))
-                    row = [item.get('id'), item.get('title'), folder, kind, entry.get('name') or '', entry.get('os_type') or '', entry.get('lang') or '',
+                    row = [item.get('id'), item.get('title'), 'movie' if media_of(item) == GOG_MEDIA_TYPE_MOVIE else 'game', folder, kind, entry.get('name') or '', entry.get('os_type') or '', entry.get('lang') or '',
                            entry.get('version') or '', size if size is not None else '', pretty_size(size) if isinstance(size, int) else '',
                            entry.get('md5') or '', update_date, update_time]
                     if savedir:
@@ -6631,13 +6787,13 @@ def cmd_backup(src_dir, dest_dir,skipextras,os_list,lang_list,ids,skipids,skipga
             continue
 
 
-        downloadsOS = [game_item for game_item in game.downloads if game_item.os_type in os_list]
+        downloadsOS = [game_item for game_item in game.downloads if os_selected(game_item, os_list)]
         game.downloads = downloadsOS
 
-        downloadsOS = [game_item for game_item in game.galaxyDownloads if game_item.os_type in os_list]
+        downloadsOS = [game_item for game_item in game.galaxyDownloads if os_selected(game_item, os_list)]
         game.galaxyDownloads = downloadsOS
 
-        downloadsOS = [game_item for game_item in game.sharedDownloads if game_item.os_type in os_list]
+        downloadsOS = [game_item for game_item in game.sharedDownloads if os_selected(game_item, os_list)]
         game.sharedDownloads = downloadsOS
 
 
@@ -6789,13 +6945,13 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
             verify_sharedDownloads = game.sharedDownloads
 
 
-        downloadsOS = [game_item for game_item in verify_downloads if game_item.os_type in os_list]
+        downloadsOS = [game_item for game_item in verify_downloads if os_selected(game_item, os_list)]
         verify_downloads = downloadsOS
 
-        downloadsOS = [game_item for game_item in verify_galaxyDownloads if game_item.os_type in os_list]
+        downloadsOS = [game_item for game_item in verify_galaxyDownloads if os_selected(game_item, os_list)]
         verify_galaxyDownloads = downloadsOS
 
-        downloadsOS = [game_item for game_item in verify_sharedDownloads if game_item.os_type in os_list]
+        downloadsOS = [game_item for game_item in verify_sharedDownloads if os_selected(game_item, os_list)]
         verify_sharedDownloads = downloadsOS
 
 
@@ -7820,7 +7976,7 @@ def main(args):
             time.sleep(args.wait * 60 * 60)
         if not args.installers:
             args.installers = "standalone"
-        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs,args.diagnostic,lang_fallback=args.lang_fallback,tags=args.tags,skiptags=args.skiptags)
+        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs,args.diagnostic,lang_fallback=args.lang_fallback,tags=args.tags,skiptags=args.skiptags,movies=args.movies,moviequality=args.moviequality)
     elif args.command == 'download':
         if (args.id):
             args.ids = [args.id]

@@ -71,11 +71,11 @@ class CsvTests(unittest.TestCase):
 
     def test_the_cells_hold_the_date_and_the_utc_time(self):
         rows = self.rows()
-        installer = [r for r in rows if r[3] == 'standalone'][0]
+        installer = [r for r in rows if r[4] == 'standalone'][0]
         self.assertEqual(installer[-2:], ['2026-06-23', '16:59:00'])
 
     def test_a_file_without_an_update_stamp_has_two_empty_cells(self):
-        extra = [r for r in self.rows() if r[3] == 'extra'][0]
+        extra = [r for r in self.rows() if r[4] == 'extra'][0]
         self.assertEqual(extra[-2:], ['', ''])
 
     def test_the_on_disk_column_stays_the_last_one(self):
