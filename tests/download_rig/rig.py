@@ -269,7 +269,7 @@ def sc_bad_xml(srv, root):
 @scenario
 def sc_images(srv, root):
     w = standard_world(srv)
-    w.items[0]['image_url'] = '//images.test/covers/alpha'; w.items[0]['bg_urls'] = {'1920': '//images.test/bg/alpha_1920', '1280': '//images.test/bg/alpha_1280'}
+    w.items[0]['image_url'] = '//images.test/covers/alpha'; w.items[0]['bg_urls'] = {'1920': '//images.test/bg/alpha_1920', '1280': '//images.test/bg/alpha_1280'}; w.items[0]['bg_urls_complete'] = True
     del w.items[0]['bg_url']
     w.items[1]['image_url'] = '//images.test/covers/beta'; w.items[1]['bg_url'] = '//images.test/bg/beta'
     for p in ('covers/alpha.jpg', 'bg/alpha_1920.jpg', 'bg/alpha_1280.jpg', 'covers/beta.jpg', 'bg/beta.jpg'): srv.images['images.test/' + p] = blob(len(p), 300)

@@ -32,6 +32,25 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.66 - 15.11.2026 - Image downloads replace artwork safely
+
+- **The problem.** A cover or background image could be deleted or moved before its replacement was requested. If the request or file write failed, the previously usable image was already gone. Background-key cleanup could also remove old folders after only some of the current images had downloaded, or when the manifest did not say whether the key list was complete.
+- **Now each image is installed atomically.** The response is written to a temporary file in the destination directory, checked for non-empty content, flushed, and installed with `os.replace`. The previous image remains in place if the request or write fails. Old files are cleaned or moved to `!orphaned` only after the replacement is installed.
+- **Background cleanup requires complete metadata.** A successful game-details fetch marks `bg_urls_complete`. Old background keys are pruned only when that marker is present and every current image was successfully obtained. Older manifests without the marker retain unrecognized background folders. If one current image fails, no stale-key cleanup is performed for that refresh.
+- **The image paths are checked.** Path traversal and unsafe path components in image metadata are rejected so an image cannot be written outside the game's `!images` directory. Symlinked directories are not traversed during old-image cleanup.
+- `tests/test_image_handling.py`: failed requests and empty responses preserve old images, successful atomic replacement, orphaning only after success, incomplete metadata retention, failed-refresh retention, stale-key cleanup after a complete successful refresh, and path traversal rejection.
+
+DIFFERENCE: image replacement is now transactional and conservative background cleanup requires an explicit completeness marker. Existing image directory layout and `-nocleanimages` semantics are retained.
+
+## 0.5.65 - 15.11.2026 - Game-directory rename cycles are staged safely
+
+- **The problem.** A game folder can need a new name when GOG changes the game's title or the folder name recorded in its metadata. Renames were handled one game at a time. If two games exchanged folder names (or formed a longer cycle), the first destination was still occupied by another game's source folder and could be moved to `!orphaned`.
+- **Now directory renames are staged as a group.** Every unambiguous source folder is first moved into a temporary directory under the library root. Only after all sources have been staged are destinations installed. This supports two-folder swaps and longer cycles without treating another game's source as an unrelated clash.
+- **Safety.** A genuine destination clash is still preserved under `!orphaned`. Duplicate source or destination mappings and path-like folder names are skipped as ambiguous or unsafe. If staging or committing fails, the operation attempts to restore the original folders and leaves `old_folder_name` pending for a later retry. Dry runs only report the planned changes and create no staging or orphan directories.
+- `tests/test_game_renames.py`: two- and three-folder cycles, genuine destination clashes, staging and commit failures with rollback, dry runs and ambiguous duplicate destinations.
+
+DIFFERENCE: game-directory renames are now staged together, just like file rename cycles. Ordinary single-folder renames and the handling of genuine destination clashes remain unchanged.
+
 ## 0.5.64 - 14.11.2026 - `export` checks that the CSV file can be written
 
 - **The problem.** With `gog-library.csv` open in Excel, `export` ended with `PermissionError: [Errno 13] Permission denied: 'gog-library.csv'` and a traceback. The check for a locked file that `wishlist --csv` already had (`file_write_problem` and `file_write_message`) was never used by `export`.

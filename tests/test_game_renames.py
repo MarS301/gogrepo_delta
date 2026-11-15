@@ -182,11 +182,188 @@ class GameRenameTests(unittest.TestCase):
         old_dir = os.path.join(self.root, 'Old Game')
         os.rename(self.game_dir, old_dir)
         game = self.game([], folder_name='Game', old_folder_name='Old Game')
-        with mock.patch.object(app, 'move_with_increment_on_clash', side_effect=OSError('simulated failure')):
+        with mock.patch.object(app.shutil, 'move', side_effect=OSError('simulated failure')):
             changed = app.handle_game_renames(self.root, [game], False)
         self.assertFalse(changed)
         self.assertEqual(game.old_folder_name, 'Old Game')
         self.assertTrue(os.path.isdir(old_dir))
+
+
+    def make_folder_game(self, old_name, new_name, game_id):
+        return self.game([], id=game_id, title=new_name, folder_name=new_name,
+                         old_folder_name=old_name)
+
+    def test_two_game_directory_cycle_swaps_folders_without_orphaning(self):
+        a = os.path.join(self.root, 'A')
+        b = os.path.join(self.root, 'B')
+        os.makedirs(a)
+        os.makedirs(b)
+        with open(os.path.join(a, 'payload'), 'wb') as stream:
+            stream.write(b'from A')
+        with open(os.path.join(b, 'payload'), 'wb') as stream:
+            stream.write(b'from B')
+        games = [self.make_folder_game('A', 'B', 1),
+                 self.make_folder_game('B', 'A', 2)]
+
+        changed = app.handle_game_renames(self.root, games, False)
+
+        self.assertTrue(changed)
+        self.assertTrue(all(game.old_folder_name is None for game in games))
+        with open(os.path.join(a, 'payload'), 'rb') as stream:
+            self.assertEqual(stream.read(), b'from B')
+        with open(os.path.join(b, 'payload'), 'rb') as stream:
+            self.assertEqual(stream.read(), b'from A')
+        self.assertFalse(os.path.exists(os.path.join(self.root, app.ORPHAN_DIR_NAME)))
+        self.assertFalse(any(name.startswith('.gogrepo-dir-rename-') for name in os.listdir(self.root)))
+
+    def test_three_game_directory_cycle_preserves_all_folder_contents(self):
+        payloads = {'A': b'payload A', 'B': b'payload B', 'C': b'payload C'}
+        for name, payload in payloads.items():
+            folder = os.path.join(self.root, name)
+            os.makedirs(folder)
+            with open(os.path.join(folder, 'data'), 'wb') as stream:
+                stream.write(payload)
+        games = [self.make_folder_game('A', 'B', 1),
+                 self.make_folder_game('B', 'C', 2),
+                 self.make_folder_game('C', 'A', 3)]
+
+        changed = app.handle_game_renames(self.root, games, False)
+
+        self.assertTrue(changed)
+        expected = {'A': b'payload C', 'B': b'payload A', 'C': b'payload B'}
+        for name, payload in expected.items():
+            with open(os.path.join(self.root, name, 'data'), 'rb') as stream:
+                self.assertEqual(stream.read(), payload)
+        self.assertTrue(all(game.old_folder_name is None for game in games))
+
+    def test_directory_rename_orphans_only_a_non_cycle_destination_clash(self):
+        old = os.path.join(self.root, 'Old')
+        new = os.path.join(self.root, 'New')
+        os.makedirs(old)
+        os.makedirs(new)
+        with open(os.path.join(old, 'installer'), 'wb') as stream:
+            stream.write(b'current game')
+        with open(os.path.join(new, 'keep'), 'wb') as stream:
+            stream.write(b'pre-existing destination')
+        game = self.make_folder_game('Old', 'New', 1)
+
+        changed = app.handle_game_renames(self.root, [game], False)
+
+        self.assertTrue(changed)
+        self.assertIsNone(game.old_folder_name)
+        with open(os.path.join(new, 'installer'), 'rb') as stream:
+            self.assertEqual(stream.read(), b'current game')
+        orphan_root = os.path.join(self.root, app.ORPHAN_DIR_NAME, 'New')
+        orphaned = [os.path.join(orphan_root, name) for name in os.listdir(orphan_root)]
+        self.assertEqual(len(orphaned), 1)
+        with open(os.path.join(orphaned[0], 'keep'), 'rb') as stream:
+            self.assertEqual(stream.read(), b'pre-existing destination')
+
+    def test_directory_staging_failure_restores_every_source_and_keeps_markers(self):
+        for name in ('A', 'B'):
+            folder = os.path.join(self.root, name)
+            os.makedirs(folder)
+            with open(os.path.join(folder, 'payload'), 'wb') as stream:
+                stream.write(name.encode('ascii'))
+        games = [self.make_folder_game('A', 'B', 1),
+                 self.make_folder_game('B', 'A', 2)]
+        real_move = shutil.move
+        calls = {'count': 0}
+
+        def fail_second_move(src, dst, *args, **kwargs):
+            calls['count'] += 1
+            if calls['count'] == 2:
+                raise OSError('simulated directory staging failure')
+            return real_move(src, dst, *args, **kwargs)
+
+        with mock.patch.object(app.shutil, 'move', side_effect=fail_second_move):
+            changed = app.handle_game_renames(self.root, games, False)
+
+        self.assertFalse(changed)
+        self.assertEqual([game.old_folder_name for game in games], ['A', 'B'])
+        for name in ('A', 'B'):
+            with open(os.path.join(self.root, name, 'payload'), 'rb') as stream:
+                self.assertEqual(stream.read(), name.encode('ascii'))
+        self.assertFalse(any(name.startswith('.gogrepo-dir-rename-') for name in os.listdir(self.root)))
+
+    def test_directory_commit_failure_rolls_back_all_staged_folders(self):
+        for name in ('A', 'B'):
+            folder = os.path.join(self.root, name)
+            os.makedirs(folder)
+            with open(os.path.join(folder, 'payload'), 'wb') as stream:
+                stream.write(name.encode('ascii'))
+        games = [self.make_folder_game('A', 'B', 1),
+                 self.make_folder_game('B', 'A', 2)]
+        real_move = shutil.move
+        calls = {'count': 0}
+
+        def fail_first_commit(src, dst, *args, **kwargs):
+            calls['count'] += 1
+            if calls['count'] == 3:
+                raise OSError('simulated directory commit failure')
+            return real_move(src, dst, *args, **kwargs)
+
+        with mock.patch.object(app.shutil, 'move', side_effect=fail_first_commit):
+            changed = app.handle_game_renames(self.root, games, False)
+
+        self.assertFalse(changed)
+        self.assertEqual([game.old_folder_name for game in games], ['A', 'B'])
+        for name in ('A', 'B'):
+            with open(os.path.join(self.root, name, 'payload'), 'rb') as stream:
+                self.assertEqual(stream.read(), name.encode('ascii'))
+        self.assertFalse(any(name.startswith('.gogrepo-dir-rename-') for name in os.listdir(self.root)))
+
+    def test_directory_dry_run_does_not_stage_or_change_anything(self):
+        old = os.path.join(self.root, 'Old')
+        os.makedirs(old)
+        with open(os.path.join(old, 'payload'), 'wb') as stream:
+            stream.write(b'unchanged')
+        game = self.make_folder_game('Old', 'New', 1)
+
+        changed = app.handle_game_renames(self.root, [game], True)
+
+        self.assertFalse(changed)
+        self.assertEqual(game.old_folder_name, 'Old')
+        self.assertTrue(os.path.isdir(old))
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'New')))
+        self.assertFalse(any(name.startswith('.gogrepo-dir-rename-') for name in os.listdir(self.root)))
+
+    def test_selected_download_uses_complete_manifest_for_directory_cycles(self):
+        for name in ('A', 'B'):
+            folder = os.path.join(self.root, name)
+            os.makedirs(folder)
+            with open(os.path.join(folder, 'payload'), 'wb') as stream:
+                stream.write(name.encode('ascii'))
+        game_a = self.make_folder_game('A', 'B', 1)
+        game_b = self.make_folder_game('B', 'A', 2)
+        selected = [game_a]
+        complete_manifest = [game_a, game_b]
+
+        with mock.patch.object(app, 'save_manifest') as save:
+            changed = app._handle_game_renames_and_save(
+                self.root, selected, False, manifest_items=complete_manifest)
+
+        self.assertTrue(changed)
+        save.assert_called_once_with(complete_manifest)
+        with open(os.path.join(self.root, 'A', 'payload'), 'rb') as stream:
+            self.assertEqual(stream.read(), b'B')
+        with open(os.path.join(self.root, 'B', 'payload'), 'rb') as stream:
+            self.assertEqual(stream.read(), b'A')
+
+    def test_duplicate_directory_destinations_are_skipped_as_ambiguous(self):
+        for name in ('A', 'B'):
+            os.makedirs(os.path.join(self.root, name))
+        games = [self.make_folder_game('A', 'C', 1),
+                 self.make_folder_game('B', 'C', 2)]
+
+        changed = app.handle_game_renames(self.root, games, False)
+
+        self.assertFalse(changed)
+        self.assertEqual([game.old_folder_name for game in games], ['A', 'B'])
+        self.assertTrue(os.path.isdir(os.path.join(self.root, 'A')))
+        self.assertTrue(os.path.isdir(os.path.join(self.root, 'B')))
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'C')))
+
 
 
 if __name__ == '__main__':
