@@ -111,7 +111,7 @@ class TokenRefreshTests(unittest.TestCase):
             calls.append(kwargs)
             raise requests.exceptions.ConnectTimeout('slow')
         session.get = fake_get
-        with mock.patch.object(g, 'HTTP_TIMEOUT', 7), self.assertRaises(g.AuthExpired):
+        with mock.patch.object(g, 'HTTP_TIMEOUT', 7), self.assertRaises(requests.exceptions.ConnectTimeout):   # a timeout is not a lost login (0.5.68)
             g.renew_token(session, retries=0)
         self.assertEqual(7, calls[0].get('timeout'))
 
@@ -119,7 +119,7 @@ class TokenRefreshTests(unittest.TestCase):
         session = self.expired_session()
         started = time.time()
         with StalledServer() as server, mock.patch.object(g, 'GOG_TOKEN_URL', server.url), mock.patch.object(g, 'HTTP_TIMEOUT', 0.5):
-            with self.assertRaises(g.AuthExpired):
+            with self.assertRaises(requests.exceptions.ReadTimeout):   # a timeout is not a lost login (0.5.68)
                 g.renew_token(session, retries=0)
         self.assertLess(time.time() - started, 5)
 

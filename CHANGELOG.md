@@ -31,6 +31,80 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.71 - 17.11.2026 - A network problem ends the run with a friendly message
+
+- **DIFFERENCE: a run that a network problem stops no longer ends with a page of traceback.** It ends (exit status 1, as before) with one line, for
+  example `Network problem: could not connect to auth.gog.com. Please check your internet connection and try again later.`, and a hint:
+  `Run the command again with -debug to see the technical details.` Before, the end of such a run was the `fatal...` entry with a traceback of about
+  70 lines (seen in a real log, with the network switched off during a token refresh).
+- It covers an error that reaches the top of the program from a request after the retries are used up: no connection (also a failed name lookup), no
+  answer in time, an answer that was cut off, and GOG answering 408, 429 or a 5xx (`GOG is busy or not working right now (error 503 from api.gog.com).
+  Please try again later.`). The host is named when it is known and the text never holds the rest of the address, so it holds no token. Every other
+  error (a 404, a bug) is logged as before, with its traceback.
+- With `-debug` the traceback is logged as well, after the friendly line.
+- The line before it, when a token refresh gives up, is shorter: `Could not renew the token: GOG could not be reached or did not answer properly.
+  The login itself is not affected.` (it repeated the whole error text, which is in the traceback anyway). A refresh that GOG refuses still says
+  "Please login again".
+- Not changed: errors inside download threads (a file that fails is listed in the summary as before).
+- Tests: `tests/test_network_message.py` (12 tests, among them the real `__main__` block of the script with `main()` failing). Eight mutations were all caught.
+
+## 0.5.70 - 17.11.2026 - token_mode is a setting of the config file
+
+- **New setting `token_mode` in `[settings]` of `gogrepo_delta.cfg`: `encrypted` (the default) or `plain`.** It chooses how `gog-token.json` is
+  written, as the environment variable `GOGREPO_TOKEN_MODE` did before. The word is not case sensitive; an empty value means the default; any other
+  word stops the program at start with the usual message (`[settings] token_mode = plan: 'plan' is not one of: encrypted, plain`). A new config file
+  contains the line (`token_mode = encrypted`) with an explanation. An existing config file is not changed; without the line the default applies.
+- **The environment variable still works and wins** when it is set (also when it is set to a different word than the file). A wrong value in it is
+  refused as before, also when it is empty.
+- **Kept on purpose: only the environment variable makes encryption mandatory.** `GOGREPO_TOKEN_MODE=encrypted` without the `cryptography` package stops
+  with a message (as before). `token_mode = encrypted` in the file is the default and keeps the old fallback: the token is saved as readable text
+  with one warning per run (never over an existing encrypted or unreadable file). Reason: the generated config file contains the line, so a "mandatory"
+  reading would change what happens for everybody who has no `cryptography` package. `token_mode = plain` needs no package and gives no warning.
+- Only the writing is affected: an existing token file is read as it is, whatever the setting says, and is not converted.
+- The warning and the "install the package" message now also name the setting (`token_mode = plain`) as a way out.
+- Tests: `tests/test_token_mode_setting.py` (14 tests). Nine mutations (default, precedence, validation, case, generated text, messages) were all caught.
+
+## 0.5.69 - 17.11.2026 - Tokens and secrets are hidden in the log
+
+- **DIFFERENCE: the values of tokens, secrets, codes and passwords are replaced by `***` in everything that is logged**, on the console and in
+  `gogrepo.log`. A failed request is logged with its full address (`400 Client Error: Bad Request for url: ...`), and for the token server that
+  address holds the `refresh_token` and the `client_secret` in its query string; the login request holds the one-time `code`. Hidden are the values of
+  `client_secret`, `refresh_token`, `access_token`, `token`, `code` and `password` in an address (`name=value`) or in a printed dictionary or JSON
+  (`'refresh_token': '...'`), and the value after `Bearer`. The rest of the message stays, so the status code and the address are still readable:
+  `... token?client_id=...&client_secret=***&grant_type=refresh_token&refresh_token=***`.
+- It works as a `logging.Filter` (`SecretFilter`) on both handlers, so it covers every message and also the traceback that `log_exception` writes
+  (a traceback repeats the error text). It never drops a record, and a record without secrets is left as it was.
+- **Not changed: entries written by earlier versions.** `gogrepo.log` (and its numbered backups) may already hold refresh tokens from failed refreshes.
+  Delete or move them before sharing a log. Text that does not look like `name=value`, `name: 'value'` or `Bearer value` is not recognised.
+- Tests: 10 more in `tests/test_request_retry.py` (the patterns, both handlers, and two end-to-end tests that run a failing refresh and a failing request
+  against a local server and read what the console handler and the real log file handler wrote). Nine mutations (each filter or pattern removed) were all caught.
+
+## 0.5.68 - 17.11.2026 - One retry loop; a failed token refresh no longer looks like a lost login
+
+- **DIFFERENCE: a token refresh that fails for a temporary reason is no longer reported as "Please login again".** Before, *any* failure of the
+  refresh (the network down, a timeout, GOG answering 500 or 503) was tried again and then ended the run with `AuthExpired`, the message that tells
+  the user to log in again, although the login was fine. Now a refresh fails as "temporary" if the network or the connection failed, it timed out,
+  the answer was cut off, or GOG answered 408, 429 or a 5xx: it is tried again `http_retry_count` times and then raised like the error of any other
+  request (the run ends with the usual "fatal" log entry, exit status 1; the token file is untouched). Everything else still means "log in again" and
+  still raises `AuthExpired` at once, without retries: GOG refusing the refresh token (400, 401, 403, any other 4xx), an answer that is not a JSON
+  object, a token without a refresh token. **Not checked against live GOG:** which status GOG really sends for a refused refresh token; 400 and 401
+  are the usual ones for an OAuth server, and every other 4xx is treated the same way as before.
+- **One retry loop for `request()` and `request_head()`** (`_send_with_retries`). The two functions were near copies that called themselves once per
+  retry. Same rules as before (`http_no_retry_codes` and `no_retry_statuses` are raised at once, `quiet_statuses` get no warning, everything else is
+  retried `retries` times after `http_retry_delay`), same signatures and defaults. `request_head()` now handles the same cases; it had no
+  `no_retry_statuses` or `quiet_statuses` arguments and still has none, since nothing needs them.
+- **DIFFERENCE: `Retry-After` is honoured.** If GOG answers with a `Retry-After` header (seconds or an HTTP date), the wait before the next try is that
+  long if it is longer than `http_retry_delay`, but never more than 300 seconds (`RETRY_AFTER_MAX`); a shorter, missing, past or unreadable value
+  changes nothing. Applies to `request()`, `request_head()` and the token refresh.
+- **DIFFERENCE: a response cut off while its body is read (`ChunkedEncodingError`) is retried** like the other connection errors; before, it ended the call at once.
+- **The retry messages show a decimal delay as it is** (`will retry in 2.5s`; `%d` showed 2s).
+- `renew_token()` is a loop instead of a call to itself. It still holds `token_lock` while it waits for a retry, on purpose: all threads need the new
+  token, and this way only one of them asks GOG. A session without a token, and a token that is still valid for 5 minutes, are left alone as before.
+- Not done (decisions for the maintainer): growing waits (backoff) and a random part (jitter) between retries; they need a new setting.
+- Tests: `tests/test_request_retry.py` (37 tests; fake sessions with real `requests.Response` objects, plus four over a real local HTTP server). Two
+  tests in `tests/test_review_fixes.py` that expected `AuthExpired` for a refresh timeout now expect the timeout. Ten mutations of the new code
+  (each of the rules above removed or reversed) were all caught.
+
 ## 0.5.67 - 15.11.2026 - Clearer download messages; dead code removed
 
 - **Wording: the messages name games and movies.** A real movie download printed `downloading games with id(s): {the_gamers_directors_cut}`. Now `downloading id(s)/title(s): {...}` and `skipping id(s)/title(s): {...}`; the three messages of `update` that said `game id(s)` say `id(s)`; and the errors when nothing is left to download say `no game or movie ...`. Two typos of those errors are gone: `no game was found was found after skipping ...` (said twice) and `... was found` + `after skipping ...` that ran together as `foundafter`.

@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.67-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.71-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -30,10 +30,14 @@ library and helps you maintain a dependable, verifiable local collection.
 > - **`cryptography` not installed:** the program saves the token as readable JSON with **no encryption** and
 >   prints a warning (once per run) that names the package to install. It never replaces an existing encrypted
 >   `gog-token.json` (or one it cannot read) by a plain-text file: it stops with a message instead. If you set
->   `GOGREPO_TOKEN_MODE=encrypted` yourself it does not fall back either, it stops. After you install the
+>   the environment variable `GOGREPO_TOKEN_MODE=encrypted` yourself it does not fall back either, it stops
+>   (`token_mode = encrypted` in the config file is the default and does fall back, with the warning). After you install the
 >   package, the next save of a plain-text token asks you to create a password and encrypts the file.
-> - **Unattended machines:** set `GOGREPO_TOKEN_MODE=plain` explicitly. This stores the token as readable
->   JSON and provides **no encryption**.
+> - **Unattended machines:** set `token_mode = plain` in the `[settings]` section of `gogrepo_delta.cfg` (or the
+>   environment variable `GOGREPO_TOKEN_MODE=plain`, which wins over the file when it is set). This stores the
+>   token as readable JSON and provides **no encryption**. The setting only decides how the file is written: an
+>   existing token file is read as it is, and an encrypted one is not replaced by a plain one unless you log in
+>   again. Keep in mind that a config file is easy to copy, sync or commit together with the other files.
 > - **Existing `gog-token.dat` files** are read only when `gog-token.json` is absent. Their contents are
 >   migrated to the new file; the legacy file is never modified or deleted.
 > - **Damaged file or wrong password:** the program reports the problem rather than silently using an
@@ -44,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.67` |
+| **Current version** | `v0.5.71` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -607,7 +611,7 @@ export GOGREPO_DELTA_CONFIG="/path/to/my-config.cfg"
 set GOGREPO_DELTA_CONFIG=C:\path\to\my-config.cfg
 ```
 
-Login credentials are never read from the configuration file.
+Login credentials are never read from the configuration file; `token_mode` in `[settings]` only chooses how the token file is saved (`encrypted`, the default, or `plain`).
 
 ## Files and data safety
 
@@ -616,7 +620,7 @@ The program keeps its state files in the current working directory (unless confi
 | File | Purpose |
 | --- | --- |
 | `gogrepo_delta.cfg` | Configuration and command defaults. |
-| `gog-token.json` | Saved GOG authentication token (encrypted by default; plain text if the `cryptography` package is missing or `GOGREPO_TOKEN_MODE=plain`). Treat it as a credential. |
+| `gog-token.json` | Saved GOG authentication token (encrypted by default; plain text if the `cryptography` package is missing or `token_mode = plain` or `GOGREPO_TOKEN_MODE=plain`). Treat it as a credential. |
 | `gog-token.dat` | Legacy token file from older versions. Read-only; never modified or deleted. |
 | `gog-manifest.dat` | Main library manifest (JSON by default). |
 | `gog-manifest.dat.bak` | Previous manifest version. |
