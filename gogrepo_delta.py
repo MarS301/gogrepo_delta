@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.67'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.71'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -155,7 +155,8 @@ def user_config_path():
     return os.environ.get(USER_CONFIG_ENV_VAR) or USER_CONFIG_FILENAME
 
 
-# key, kind, built-in default, smallest allowed value (kinds: int, number = int or decimal, codes = list of HTTP codes)
+# key, kind, built-in default, smallest allowed value (kinds: int, number = int or decimal, codes = list of HTTP codes,
+# choice = one of the words given in place of the smallest value)
 SETTINGS = [
     ('log_max_mb', 'int', 180, 1),
     ('log_backups', 'int', 9, 0),
@@ -171,6 +172,7 @@ SETTINGS = [
     ('max_listed_failures', 'int', 40, 1),
     ('file_replace_attempts', 'int', 5, 1),
     ('file_replace_delay', 'number', 0.2, 0),
+    ('token_mode', 'choice', 'encrypted', ('encrypted', 'plain')),
 ]
 SETTING_KEYS = dict((s[0], s) for s in SETTINGS)
 
@@ -193,6 +195,11 @@ SETTING_GROUPS = [
     (('file_replace_attempts', 'file_replace_delay'),
      'saving a file is retried when Windows has it locked for a moment (virus scanner): number of attempts; seconds '
      'between them'),
+    (('token_mode',),
+     'how the login token file gog-token.json is saved: encrypted (with a password you choose; needs the cryptography '
+     'package, without it the token is saved as readable text and a warning says so) or plain (always readable text, no '
+     'password: for unattended machines). Only decides how the file is written; an existing file is read as it is. The '
+     'environment variable GOGREPO_TOKEN_MODE, if set, wins over this entry'),
 ]
 
 
@@ -204,6 +211,10 @@ def parse_setting(key, text):
     """The value of a [settings] entry, from its text. Raises ValueError (with the reason) if it cannot be used."""
     kind, minimum = SETTING_KEYS[key][1], SETTING_KEYS[key][3]
     text = text.strip()
+    if kind == 'choice':
+        if text.lower() not in minimum:
+            raise ValueError('%r is not one of: %s' % (text, ', '.join(minimum)))
+        return text.lower()
     if kind == 'codes':
         codes = []
         for part in text.replace('\n', ',').split(','):
@@ -277,6 +288,37 @@ logFormatter = logging.Formatter("%(asctime)s | %(message)s", datefmt='%H:%M:%S'
 fileLogFormatter = logging.Formatter("%(asctime)s | %(levelname)-8s | %(message)s", datefmt='%Y-%m-%d %H:%M:%S')
 rootLogger = logging.getLogger('gogrepoc')
 rootLogger.setLevel(logging.DEBUG)
+
+# Entry 69: secrets never reach the log. A failed request is logged with its full address, and the address of the token server holds the
+# refresh token (and, for the login, the one-time code) in its query string; the error text of requests repeats it.
+_SECRET_NAMES = r'client_secret|refresh_token|access_token|password|token|code'
+_SECRET_PATTERNS = (
+    (re.compile(r'(?i)(?<![A-Za-z0-9_])((?:' + _SECRET_NAMES + r')=)[^&\s\'"<>]+'), r'\1***'),                 # ?refresh_token=abc&...
+    (re.compile(r'(?i)(["\']?(?:client_secret|refresh_token|access_token)["\']?\s*[:=]\s*["\'])[^"\']+'), r'\1***'),   # "refresh_token": "abc"
+    (re.compile(r'(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]+'), r'\1 ***'),                                              # Authorization header
+)
+
+def redact_secrets(text):
+    """text with the values of tokens, secrets, codes and passwords replaced by ***."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+class SecretFilter(logging.Filter):
+    """Removes secrets from a log record (its message and its traceback) before any handler writes it. Never drops a record."""
+    def filter(self, record):
+        try:
+            message = record.getMessage()
+            clean = redact_secrets(message)
+            if clean != message:
+                record.msg, record.args = clean, ()
+            if record.exc_info and not record.exc_text:
+                record.exc_text = logging.Formatter().formatException(record.exc_info)
+            if record.exc_text:
+                record.exc_text = redact_secrets(record.exc_text)
+        except Exception:       # a record that cannot be cleaned is left to the handler, which reports its own formatting problems
+            pass
+        return True
 # Refactoring (fix): when output goes to a file or pipe (a scheduled task, "> log.txt"), Windows uses its legacy code
 # page (e.g. cp1252), which cannot hold Chinese, Japanese, ... game titles. Every such log line then failed with a
 # "Logging error" traceback and was lost, and print() crashed the program. Characters the output encoding cannot
@@ -291,6 +333,8 @@ consoleHandler = logging.StreamHandler(sys.stdout)
 loggingHandler = logging.handlers.RotatingFileHandler('gogrepo.log', mode='a+', maxBytes = 1024*1024*LOG_MAX_MB , backupCount = LOG_BACKUPS,  encoding='utf-8', delay=True)
 loggingHandler.setFormatter(fileLogFormatter)
 consoleHandler.setFormatter(logFormatter)
+loggingHandler.addFilter(SecretFilter())
+consoleHandler.addFilter(SecretFilter())
 rootLogger.addHandler(consoleHandler)
 
 # logging aliases
@@ -793,108 +837,181 @@ POSIX_PREALLOCATION_FS = ["exfat","vfat","ntfs","btrfs", "ext4", "ocfs2", "xfs"]
 
 
 #request wrapper
-def request(session,url,args=None,byte_range=None,retries=HTTP_RETRY_COUNT,delay=None,stream=False,data=None,quiet_statuses=(),no_retry_statuses=()):
-    """Performs web request to url with optional retries, delay, and byte range.
-    """
-    _retry = False
+RETRY_AFTER_MAX = 300   # seconds: the longest wait we accept when GOG sends a Retry-After header
+_RETRYABLE_REQUEST_ERRORS = (requests.HTTPError, requests.URLRequired, requests.Timeout, requests.ConnectionError,
+                             requests.exceptions.SSLError, requests.exceptions.ChunkedEncodingError)
+
+def _seconds_text(seconds):
+    """'5' for 5 and 2.5 for 2.5 (the retry messages used %d, which showed a decimal setting wrongly)."""
+    return '%g' % seconds
+
+def _retry_after_seconds(response):
+    """The wait (in seconds) that a Retry-After header asks for, as a number or an HTTP date; None if absent or unusable.
+    Never more than RETRY_AFTER_MAX."""
+    try:
+        value = response.headers.get('Retry-After')
+    except AttributeError:
+        return None
+    if not value:
+        return None
+    value = str(value).strip()
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            when = email.utils.parsedate_to_datetime(value)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=datetime.timezone.utc)
+            seconds = (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+    if seconds != seconds or seconds < 0:     # NaN or in the past
+        return None
+    return min(seconds, RETRY_AFTER_MAX)
+
+def _retry_wait(error_):
+    """How long to wait before trying again: HTTP_RETRY_DELAY, or longer if the server's Retry-After asks for more."""
+    wait = HTTP_RETRY_DELAY
+    response = getattr(error_, 'response', None)
+    if response is not None:                  # not "if response": a Response is false for an error status
+        asked = _retry_after_seconds(response)
+        if asked is not None:
+            wait = max(wait, asked)
+    return wait
+
+def network_problem_text(error_):
+    """One short, friendly line for an error that is a network problem or a busy or broken GOG (the kind that is gone later); None for any
+    other error. The host is named when it is known."""
+    request_ = getattr(error_, 'request', None)
+    if request_ is None:
+        request_ = getattr(getattr(error_, 'response', None), 'request', None)
+    try:
+        host = urlparse(request_.url).hostname or ''
+    except (AttributeError, ValueError):
+        host = ''
+    where = host or 'GOG'
+    if isinstance(error_, requests.exceptions.Timeout):
+        return 'Network problem: %s did not answer in time. Please check your internet connection and try again later.' % where
+    if isinstance(error_, requests.exceptions.ConnectionError):
+        return 'Network problem: could not connect to %s. Please check your internet connection and try again later.' % where
+    if isinstance(error_, requests.exceptions.ChunkedEncodingError):
+        return 'Network problem: the connection to %s was interrupted. Please check your internet connection and try again later.' % where
+    if isinstance(error_, requests.HTTPError):
+        status = getattr(error_.response, 'status_code', None)
+        if status is not None and (status >= 500 or status in (408, 429)):
+            return 'GOG is busy or not working right now (error %d from %s). Please try again later.' % (status, where)
+    return None
+
+def log_fatal_request_error(error_):
+    """The end of a run that a failed request stopped (called inside the except block). A network problem gets its friendly line and a hint
+    instead of a page of traceback; with -debug, and for every other error, the traceback is logged as before."""
+    text = network_problem_text(error_)
+    if text is not None:
+        error(text)
+    if text is None or rootLogger.isEnabledFor(logging.DEBUG):
+        log_exception('fatal...')
+    else:
+        error('Run the command again with -debug to see the technical details.')
+
+def _send_with_retries(session, send, retries, delay, quiet_statuses=(), no_retry_statuses=()):
+    """The retry loop behind request() and request_head(). send() performs one attempt and returns the response.
+    Same rules as before: HTTP_PERM_ERRORCODES (and no_retry_statuses) are raised at once, every other failure is tried again up to
+    `retries` times after HTTP_RETRY_DELAY seconds (longer if the server sends Retry-After), then raised. A loop instead of a call to itself."""
     if delay is not None:
         time.sleep(delay)
-
-    renew_token(session)
-
-    try:
-        if data is not None:
-            if byte_range is not None:
-                response = session.post(url, params=args, headers= {'Range':'bytes=%d-%d' % byte_range},timeout=HTTP_TIMEOUT,stream=stream,data=data)
-            else:
-                response = session.post(url, params=args,stream=stream,timeout=HTTP_TIMEOUT,data=data)
-        else:
-            if byte_range is not None:
-                response = session.get(url, params=args, headers= {'Range':'bytes=%d-%d' % byte_range},timeout=HTTP_TIMEOUT,stream=stream)
-            else:
-                response = session.get(url, params=args,stream=stream,timeout=HTTP_TIMEOUT)
-        response.raise_for_status()
-    except (requests.HTTPError, requests.URLRequired, requests.Timeout,requests.ConnectionError,requests.exceptions.SSLError) as e:
-        if isinstance(e, requests.HTTPError):
-            if e.response.status_code in HTTP_PERM_ERRORCODES or e.response.status_code in no_retry_statuses:  # do not retry these HTTP codes (no_retry_statuses: only for this call)
-                if e.response.status_code in quiet_statuses:  # caller handles (and reports) this status itself
+    while True:
+        renew_token(session)
+        try:
+            response = send()
+            response.raise_for_status()
+            return response
+        except _RETRYABLE_REQUEST_ERRORS as e:
+            status = e.response.status_code if isinstance(e, requests.HTTPError) and e.response is not None else None
+            if status is not None and (status in HTTP_PERM_ERRORCODES or status in no_retry_statuses):  # do not retry these HTTP codes
+                if status in quiet_statuses:  # caller handles (and reports) this status itself
                     debug('request failed: %s.  will not retry.', e)
                 else:
                     warn('request failed: %s.  will not retry.', e)
                 raise
-        if retries > 0:
-            _retry = True
-        else:
-            raise
+            if retries <= 0:
+                raise
+            wait = _retry_wait(e)
+            warn('request failed: %s (%d retries left) -- will retry in %ss...' % (e, retries, _seconds_text(wait)))
+            retries -= 1
+            time.sleep(wait)
 
-        if _retry:
-            warn('request failed: %s (%d retries left) -- will retry in %ds...' % (e, retries, HTTP_RETRY_DELAY))
-            return request(session=session,url=url, args=args, byte_range=byte_range, retries=retries-1, delay=HTTP_RETRY_DELAY,stream=stream,data=data,quiet_statuses=quiet_statuses,no_retry_statuses=no_retry_statuses)
-    return response
+def request(session,url,args=None,byte_range=None,retries=HTTP_RETRY_COUNT,delay=None,stream=False,data=None,quiet_statuses=(),no_retry_statuses=()):
+    """Performs web request to url with optional retries, delay, and byte range.
+    """
+    def send():
+        if data is not None:
+            if byte_range is not None:
+                return session.post(url, params=args, headers= {'Range':'bytes=%d-%d' % byte_range},timeout=HTTP_TIMEOUT,stream=stream,data=data)
+            return session.post(url, params=args,stream=stream,timeout=HTTP_TIMEOUT,data=data)
+        if byte_range is not None:
+            return session.get(url, params=args, headers= {'Range':'bytes=%d-%d' % byte_range},timeout=HTTP_TIMEOUT,stream=stream)
+        return session.get(url, params=args,stream=stream,timeout=HTTP_TIMEOUT)
+    return _send_with_retries(session, send, retries, delay, quiet_statuses, no_retry_statuses)
 
 #Request Head weapper
 def request_head(session,url,args=None,retries=HTTP_RETRY_COUNT,delay=None,allow_redirects=True):
     """Performs web head request to url with optional retries, delay,allow_redirects
     """
-    _retry = False
-    if delay is not None:
-        time.sleep(delay)
-
-    renew_token(session)
-
-    try:
-        response = session.head(url, params=args,timeout=HTTP_TIMEOUT, allow_redirects=allow_redirects)
-        response.raise_for_status()
-    except (requests.HTTPError, requests.URLRequired, requests.Timeout,requests.ConnectionError,requests.exceptions.SSLError) as e:
-        if isinstance(e, requests.HTTPError):
-            if e.response.status_code in HTTP_PERM_ERRORCODES:  # do not retry these HTTP codes
-                warn('request failed: %s.  will not retry.', e)
-                raise
-        if retries > 0:
-            _retry = True
-        else:
-            raise
-
-        if _retry:
-            warn('request failed: %s (%d retries left) -- will retry in %ds...' % (e, retries, HTTP_RETRY_DELAY))
-            return request_head(session=session,url=url, args=args, retries=retries-1, delay=HTTP_RETRY_DELAY)
-    return response
+    def send():
+        return session.head(url, params=args,timeout=HTTP_TIMEOUT, allow_redirects=allow_redirects)
+    return _send_with_retries(session, send, retries, delay)
 
 
+def _token_refresh_error_is_temporary(error_):
+    """A refresh that failed because of the network or a server that is down or busy is worth another try, and says nothing about the
+    login. Anything else (GOG refuses the refresh token, a missing field, ...) means: log in again."""
+    if isinstance(error_, requests.HTTPError):
+        status = getattr(error_.response, 'status_code', None)
+        return status is not None and (status >= 500 or status in (408, 429))
+    return isinstance(error_, (requests.Timeout, requests.ConnectionError, requests.exceptions.ChunkedEncodingError))
 
 def renew_token(session,retries=HTTP_RETRY_COUNT,delay=None):
+    """Refresh the access token if it expires within 5 minutes. token_lock stays held while waiting for a retry on purpose: every other
+    thread needs the new token as well, and this way only one of them asks GOG.
+    A refresh that fails for a temporary reason (network, timeout, GOG answering 5xx, 408 or 429) is tried again `retries` times and then the
+    error is raised like that of any other request. Only a refusal (or an unusable answer) raises AuthExpired: then the login is gone."""
     with token_lock:
-        _retry = False
         if delay is not None:
             time.sleep(delay)
-
-        time_now = time.time()
-        try:
-            if time_now + 300 > session.token['expiry']:
-                info('refreshing token')
-                try:
-                    token_response = session.get(GOG_TOKEN_URL,params={'client_id':GOG_CLIENT_ID ,'client_secret':GOG_SECRET, 'grant_type': 'refresh_token','refresh_token': session.token['refresh_token']},timeout=HTTP_TIMEOUT)
-                    token_response.raise_for_status()
-                except Exception as e:
-                        if retries > 0:
-                            _retry = True
-                        else:
-                            error(e)
-                            error('Could not renew token, Please login again.')
-                            raise AuthExpired()
-                        if _retry:
-                            warn('token refresh failed: %s (%d retries left) -- will retry in %ds...' % (e, retries, HTTP_RETRY_DELAY))
-                            return renew_token(session=session, retries=retries-1, delay=HTTP_RETRY_DELAY)
+        token = getattr(session, 'token', None)
+        if token is None:
+            return                              # Not a Token based session
+        while True:
+            time_now = time.time()
+            if time_now + 300 <= token['expiry']:
+                return                          # still valid (or another thread has just refreshed it)
+            info('refreshing token')
+            try:
+                token_response = session.get(GOG_TOKEN_URL,params={'client_id':GOG_CLIENT_ID ,'client_secret':GOG_SECRET, 'grant_type': 'refresh_token','refresh_token': token['refresh_token']},timeout=HTTP_TIMEOUT)
+                token_response.raise_for_status()
                 token_json = token_response.json()
-                for item in token_json:
-                    session.token[item] = token_json[item]
-                session.token['expiry'] = time_now + token_json['expires_in']
-                save_token(session.token)
-                session.headers['Authorization'] = "Bearer " + session.token['access_token']
-                info('refreshed token')
-        except AttributeError:
-            #Not a Token based session
-            pass
+                if not isinstance(token_json, dict):
+                    raise ValueError('unexpected answer from the token server')
+            except Exception as e:
+                if _token_refresh_error_is_temporary(e):
+                    if retries <= 0:
+                        error('Could not renew the token: GOG could not be reached or did not answer properly. The login itself is not affected.')
+                        raise
+                    wait = _retry_wait(e)
+                    warn('token refresh failed: %s (%d retries left) -- will retry in %ss...' % (e, retries, _seconds_text(wait)))
+                    retries -= 1
+                    time.sleep(wait)
+                    continue
+                error(e)
+                error('Could not renew token, Please login again.')
+                raise AuthExpired()
+            for item in token_json:
+                token[item] = token_json[item]
+            token['expiry'] = time_now + token_json['expires_in']
+            save_token(token)
+            session.headers['Authorization'] = "Bearer " + token['access_token']
+            info('refreshed token')
+            return
 
 
 # --------------------------
@@ -4288,8 +4405,8 @@ def makeGOGSession(loginSession=False):
             sys.exit(1)
     return gogSession
 
-# Token storage defaults to password-protected AES-256-GCM. Set GOGREPO_TOKEN_MODE=plain
-# explicitly for unattended machines; this writes readable JSON and is not encrypted.
+# Token storage defaults to password-protected AES-256-GCM. Set token_mode = plain in the config file (or the environment variable
+# GOGREPO_TOKEN_MODE=plain, which wins) explicitly for unattended machines; this writes readable JSON and is not encrypted.
 TOKEN_MODE_ENV = 'GOGREPO_TOKEN_MODE'
 _TOKEN_PASSWORD = None
 _TOKEN_ENVELOPE_FORMAT = 'gogrepo-token'
@@ -4300,7 +4417,11 @@ _TOKEN_SCRYPT_P = 1
 
 
 def _token_mode():
-    mode = os.environ.get(TOKEN_MODE_ENV, 'encrypted').strip().lower()
+    """'encrypted' or 'plain': the environment variable GOGREPO_TOKEN_MODE if it is set, else the token_mode setting of the config file
+    (default encrypted; the file's value was checked when it was read)."""
+    if TOKEN_MODE_ENV not in os.environ:
+        return SETTING_VALUES['token_mode']
+    mode = os.environ[TOKEN_MODE_ENV].strip().lower()
     if mode not in ('encrypted', 'plain'):
         raise ValueError('%s must be "encrypted" or "plain"' % TOKEN_MODE_ENV)
     return mode
@@ -4357,7 +4478,7 @@ def _token_mode_for_writing(filepath):
     install = 'python -m pip install cryptography'
     if os.environ.get(TOKEN_MODE_ENV) is not None:
         raise TokenModuleMissing('%s=encrypted asks for an encrypted token file, which needs the "cryptography" package. Install it with: %s '
-                                 '(or set %s=plain for a readable plain-text token file)' % (TOKEN_MODE_ENV, install, TOKEN_MODE_ENV))
+                                 '(or set %s=plain, or token_mode = plain in the config file, for a readable plain-text token file)' % (TOKEN_MODE_ENV, install, TOKEN_MODE_ENV))
     state = _existing_token_state(filepath)
     if state == 'encrypted':
         raise TokenModuleMissing('The existing %s is encrypted and the "cryptography" package that writes it is not installed, so it is not '
@@ -4368,7 +4489,7 @@ def _token_mode_for_writing(filepath):
     if not _TOKEN_PLAIN_FALLBACK_WARNED:
         _TOKEN_PLAIN_FALLBACK_WARNED = True
         warn('The "cryptography" package is not installed, so %s is saved as readable plain text and is NOT encrypted. Install it '
-             '(%s) for a password-encrypted token file.' % (filepath, install))
+             '(%s) for a password-encrypted token file, or set token_mode = plain in the config file to stop this warning.' % (filepath, install))
     return 'plain'
 
 
@@ -8372,6 +8493,9 @@ if __name__ == "__main__":
         sys.exit(1)
     except TokenModuleMissing as e:
         error('%s' % e)         # no traceback: the message says what to install
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        log_fatal_request_error(e)      # a network problem: a friendly line instead of a traceback (the traceback with -debug)
         sys.exit(1)
     except Exception:
         log_exception('fatal...')
