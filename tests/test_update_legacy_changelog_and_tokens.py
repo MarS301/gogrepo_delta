@@ -83,7 +83,7 @@ class TokenStoreTests(WorkingDirectory):
             f.write('{broken')
         with open(gog.LEGACY_TOKEN_FILENAME, 'w', encoding='utf-8') as f:
             f.write("{'access_token': 'stale'}")
-        with self.assertRaises(json.JSONDecodeError):
+        with self.assertRaises(gog.TokenFileError):      # a ValueError with a clear message (it was a bare JSONDecodeError)
             gog.load_token()
 
     def test_wrong_password_does_not_fall_back_to_legacy_file(self):

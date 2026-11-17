@@ -122,6 +122,22 @@ class ChunkRetryTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(self.sleeps, [g.HTTP_RETRY_DELAY])
 
+    def test_the_chunk_loop_varies_its_wait_by_the_jitter(self):
+        self.outcomes = [4, 10]
+        with mock.patch.object(g, 'RETRY_JITTER', 0.2), mock.patch.object(g.random, 'uniform', lambda low, high: high):
+            result, log = self.run_chunks()
+        self.assertTrue(result)
+        self.assertEqual(self.sleeps, [g.HTTP_RETRY_DELAY * 1.2])
+        self.assertIn('will retry in 6s', log)          # the message names the wait that is really made
+
+    def test_the_plain_loop_varies_its_wait_by_the_jitter(self):
+        self.outcomes = [3, 10]
+        with mock.patch.object(g, 'RETRY_JITTER', 0.2), mock.patch.object(g.random, 'uniform', lambda low, high: low), \
+                mock.patch.object(g, 'open_notrunc', g.open_notruncwrrd), self.assertLogs('gogrepoc', level='DEBUG') as logs:
+            result = g._download_without_chunk_verification(self.job, 1, 'http://x/x.bin', 'x.bin', self.path, 10, 0, 9)
+        self.assertTrue(result)
+        self.assertEqual(self.sleeps, [g.HTTP_RETRY_DELAY * 0.8])
+        self.assertIn('will retry in 4s', '\n'.join(logs.output))      # the message names the wait that is really made
 
 if __name__ == '__main__':
     unittest.main()

@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.71-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.74-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -36,8 +36,8 @@ library and helps you maintain a dependable, verifiable local collection.
 > - **Unattended machines:** set `token_mode = plain` in the `[settings]` section of `gogrepo_delta.cfg` (or the
 >   environment variable `GOGREPO_TOKEN_MODE=plain`, which wins over the file when it is set). This stores the
 >   token as readable JSON and provides **no encryption**. The setting only decides how the file is written: an
->   existing token file is read as it is, and an encrypted one is not replaced by a plain one unless you log in
->   again. Keep in mind that a config file is easy to copy, sync or commit together with the other files.
+>   existing token file is read as it is, but the next time the token is saved (after a refresh or a login) an
+>   encrypted file is replaced by readable plain text, and a warning says so. Keep in mind that a config file is easy to copy, sync or commit together with the other files.
 > - **Existing `gog-token.dat` files** are read only when `gog-token.json` is absent. Their contents are
 >   migrated to the new file; the legacy file is never modified or deleted.
 > - **Damaged file or wrong password:** the program reports the problem rather than silently using an
@@ -48,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.71` |
+| **Current version** | `v0.5.74` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
