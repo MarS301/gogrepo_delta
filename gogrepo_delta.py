@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.74'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.76'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -170,6 +170,7 @@ SETTINGS = [
     ('download_threads', 'int', 4, 1),
     ('progress_interval', 'number', 1, 0.1),
     ('resume_save_threshold', 'int', 50, 1),
+    ('resume_retry_count', 'int', 3, 0),
     ('summary_max_items', 'int', 15, 1),
     ('max_listed_failures', 'int', 40, 1),
     ('file_replace_attempts', 'int', 5, 1),
@@ -194,6 +195,10 @@ SETTING_GROUPS = [
     (('resume_save_threshold', 'summary_max_items', 'max_listed_failures'),
      'update saves its progress every N games; combined warnings list at most N names; the summary at the end lists at '
      'most N failed items'),
+    (('resume_retry_count',),
+     'update: a game whose details could not be fetched is kept in the resume manifest and tried again by the next updates; '
+     'after this many retries (so after the first try plus N more) it is given up, so that it no longer holds back the '
+     'update you asked for. 0 gives it up at once'),
     (('file_replace_attempts', 'file_replace_delay'),
      'saving a file is retried when Windows has it locked for a moment (virus scanner): number of attempts; seconds '
      'between them'),
@@ -819,6 +824,7 @@ IMAGES_DIR_NAME = '!images'
 ORPHAN_DIR_EXCLUDE_LIST = [ORPHAN_DIR_NAME,DOWNLOADING_DIR_NAME,IMAGES_DIR_NAME, MD5_DIR_NAME, '!misc', ]
 ORPHAN_FILE_EXCLUDE_LIST = [INFO_FILENAME, SERIAL_FILENAME]
 RESUME_SAVE_THRESHOLD = SETTING_VALUES['resume_save_threshold']
+RESUME_RETRY_COUNT = SETTING_VALUES['resume_retry_count']
 
 RESUME_MANIFEST_SYNTAX_VERSION = 1
 
@@ -4818,9 +4824,12 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
 
     updateSession = makeGOGSession()
 
+    failure_counts = {}     # game id (as text: the manifest is JSON) -> how many times in a row its details could not be fetched; kept in the resume
+                            # manifest, also when it is complete
     try:
         resumedb = load_resume_manifest()
         resumeprops = resumedb.pop()
+        failure_counts = dict(resumeprops.get('failure_counts') or {})
         needresume = resumemode != "noresume" and not resumeprops['complete']
         try:
             resume_manifest_syntax_version = resumeprops['resume_manifest_syntax_version']
@@ -5112,6 +5121,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
     i = 0
     resumedb = sorted(items, key=lambda item: item.title)
     resumeprop = {'resume_manifest_syntax_version':RESUME_MANIFEST_SYNTAX_VERSION,'os_list':os_list,'lang_list':lang_list,'lang_fallback':lang_fallback,'installers':installers,'strict':strict,'complete':False,'skipknown':skipknown,'partial':partial,'updateonly':updateonly,'strictDupe':strictDupe,'strictDownloadsUpdate':strictDownloadsUpdate,'strictExtrasUpdate':strictExtrasUpdate,'md5xmls':md5xmls,'movies':movies,'moviequality':moviequality,'noChangeLogs':noChangeLogs,'diagnostic':diagnostic}
+    resumeprop['failure_counts'] = failure_counts
     resumedb.append(resumeprop)
     save_resume_manifest(resumedb)
 
@@ -5230,13 +5240,23 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                     gamesdb.append(item)
                     run_report.count('new games added')
                 processed_successfully = True
+                failure_counts.pop(str(item.id), None)  # it works now: the count of failures in a row starts again
             except Exception as e:
                 warn("The handled exception was:")
                 log_exception('error')
                 warn("End exception report.")
                 run_report.fail(str(getattr(item, 'title', item)), "could not be fetched or processed: %s: %s" % (type(e).__name__, e))
+                failure_counts[str(item.id)] = failure_counts.get(str(item.id), 0) + 1
             # Keep failed games in the resume manifest. They can then be retried
             # on the next invocation instead of silently being marked complete.
+            # Not for ever: after RESUME_RETRY_COUNT retries a game is given up. Otherwise a game whose details can never be fetched would
+            # stay in the resume manifest for ever, and every update would only resume it and never get to the update that was asked for.
+            if not processed_successfully and failure_counts[str(item.id)] > RESUME_RETRY_COUNT:
+                warn("giving up on '%s' (id %s) for now: its details could not be fetched %d time%s in a row. It is no longer kept in the resume "
+                     "manifest, so it does not hold back the next update; every update that includes it still tries it once and reports the "
+                     "failure again, until it works." % (getattr(item, 'title', item), item.id, failure_counts[str(item.id)],
+                                                         '' if failure_counts[str(item.id)] == 1 else 's'))
+                processed_successfully = True           # not a success: it only leaves the list of pending games (run_report.fail has been called)
             if processed_successfully:
                 resumedb.remove(item)
             # Refactoring: this used to save after EVERY game in the default (-standard/-updateonly/-skipknown)
@@ -5279,7 +5299,8 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
     flush_summarised()
     if not resumeprop['complete']:
         pending_count = len(resumedb) - 1
-        warn('%d game(s) could not be processed and remain in the resume manifest; run update again to retry them.' % pending_count)
+        warn('%d game(s) could not be processed and remain in the resume manifest; run update again to retry them (a game is given up after %d '
+             'retr%s).' % (pending_count, RESUME_RETRY_COUNT, 'y' if RESUME_RETRY_COUNT == 1 else 'ies'))
     elif needresume:
         info('resume completed')
         if (resumemode != 'onlyresume'):
@@ -7933,21 +7954,50 @@ def cmd_clear_provisional(cleandir,dryrun):
         info("provisional: nothing is waiting in '%s'" % os.path.join(DOWNLOADING_DIR_NAME, PROVISIONAL_DIR_NAME))
 
 
+def ensure_attribute(obj, name, default):
+    """Gives obj the attribute `name` with the value `default` if it does not have it yet (an item from the manifest of an older version);
+    returns the value the attribute has."""
+    if not hasattr(obj, name):
+        setattr(obj, name, default)
+    return getattr(obj, name)
+
+
+def _orphan_game_file(cleandir, game_dir_name, filename, orphan_root_dir, dryrun, reason=''):
+    """Moves one file of a game folder to the orphan folder; with dryrun only says so and works out the size. Returns the size of the file
+    if it was moved (or would be), None if it could not be (that is reported as an error and in the summary of the run)."""
+    shown = os.path.join(game_dir_name, filename)
+    info("orphaning file '{}'{}".format(shown, reason))
+    dest_dir = os.path.join(orphan_root_dir, game_dir_name)
+    file_to_move = os.path.join(cleandir, game_dir_name, filename)
+    try:
+        file_size = os.path.getsize(file_to_move)
+        if not dryrun:
+            os.makedirs(dest_dir, exist_ok=True)
+            move_with_increment_on_clash(file_to_move, os.path.join(dest_dir, filename))
+            run_report.count('files moved to the orphan folder', 1, file_size)
+        return file_size
+    except Exception as e:
+        if dryrun:
+            warn("could not look at '{}': {}".format(shown, e))
+        else:
+            error(str(e))
+            error("could not move to destination '{}'".format(os.path.join(dest_dir, filename)))
+            run_report.fail(shown, 'could not be moved to the orphan folder: ' + str(e))
+        return None
+
+
 def cmd_clean(cleandir, dryrun, items=None):
     if items is None:
         items = load_manifest()
     items_by_title = {}
     total_size = 0  # in bytes
     have_cleaned = False
+    move_failed = False
 
 
     # make convenient dict with title/dirname as key
     for item in items:
-        try:
-            _ = item.folder_name
-        except AttributeError:
-            item.folder_name = item.title
-        items_by_title[item.folder_name] = item
+        items_by_title[ensure_attribute(item, 'folder_name', item.title)] = item
 
     # create orphan root dir
     orphan_root_dir = os.path.join(cleandir, ORPHAN_DIR_NAME)
@@ -7977,70 +8027,27 @@ def cmd_clean(cleandir, dryrun, items=None):
                 if has_unknown_filename:
                     warn("Not orphaning unrecognized files from %s because one or more manifest filenames are unknown" % cur_fulldir)
                 for game_item in game_items:
-                    try:
-                        _ = game_item.force_change
-                    except AttributeError:
-                        game_item.force_change = False
-                    try:
-                        _ = game_item.updated
-                    except AttributeError:
-                        game_item.updated = None
-                    try:
-                        _ = game_item.old_updated
-                    except AttributeError:
-                        game_item.old_updated = None
+                    ensure_attribute(game_item, 'updated', None)
+                    ensure_attribute(game_item, 'old_updated', None)
                     expected_filenames.append(game_item.name)
 
-                    if game_item.force_change == True:
+                    if ensure_attribute(game_item, 'force_change', False) == True:
                         changed_game_items[game_item.name] = game_item
                 for cur_dir_file in os.listdir(cur_fulldir):
                     if os.path.isdir(os.path.join(cleandir, cur_dir, cur_dir_file)):
                         continue  # leave subdirs alone
                     if not has_unknown_filename and cur_dir_file not in expected_filenames and cur_dir_file not in ORPHAN_FILE_EXCLUDE_LIST:
-                        info("orphaning file '{}'".format(os.path.join(cur_dir, cur_dir_file)))
-                        dest_dir = os.path.join(orphan_root_dir, cur_dir)
-                        if not os.path.isdir(dest_dir):
-                            if not dryrun:
-                                os.makedirs(dest_dir)
-                        file_to_move = os.path.join(cleandir, cur_dir, cur_dir_file)
-                        if not dryrun:
-                            try:
-                                file_size = os.path.getsize(file_to_move)
-                                move_with_increment_on_clash(file_to_move, os.path.join(dest_dir,cur_dir_file))
-                                have_cleaned = True
-                                total_size += file_size
-                                run_report.count('files moved to the orphan folder', 1, file_size)
-                            except Exception as e:
-                                error(str(e))
-                                error("could not move to destination '{}'".format(os.path.join(dest_dir,cur_dir_file)))
-                                run_report.fail(os.path.join(cur_dir, cur_dir_file), 'could not be moved to the orphan folder: ' + str(e))
-                        else:
-                            have_cleaned = True
-                            total_size += os.path.getsize(file_to_move)
-                    #print(changed_game_items.keys())
-                    #print(cur_dir_file)
-                    if cur_dir_file in changed_game_items.keys() and cur_dir_file in expected_filenames:
-                        info("orphaning file '{}' as it has been marked for change.".format(os.path.join(cur_dir, cur_dir_file)))
-                        dest_dir = os.path.join(orphan_root_dir, cur_dir)
-                        if not os.path.isdir(dest_dir):
-                            if not dryrun:
-                                os.makedirs(dest_dir)
-                        file_to_move = os.path.join(cleandir, cur_dir, cur_dir_file)
-                        if not dryrun:
-                            try:
-                                file_size = os.path.getsize(file_to_move)
-                                move_with_increment_on_clash(file_to_move, os.path.join(dest_dir,cur_dir_file))
-                                have_cleaned = True
-                                total_size += file_size
-                                run_report.count('files moved to the orphan folder', 1, file_size)
-                                changed_item =  changed_game_items[cur_dir_file]
-                                #changed_item.old_updated = changed_item.updated
-                                #changed_item.force_change = False
-                                #changed_item.prev_verified = False
-                            except Exception as e:
-                                error(str(e))
-                                error("could not move to destination '{}'".format(os.path.join(dest_dir,cur_dir_file)))
-                                run_report.fail(os.path.join(cur_dir, cur_dir_file), 'could not be moved to the orphan folder: ' + str(e))
+                        reason = ''                                         # a file the manifest does not know
+                    elif cur_dir_file in changed_game_items and cur_dir_file in expected_filenames:
+                        reason = ' as it has been marked for change.'      # a known file whose content is to be fetched again
+                    else:
+                        continue
+                    moved_size = _orphan_game_file(cleandir, cur_dir, cur_dir_file, orphan_root_dir, dryrun, reason)
+                    if moved_size is None:
+                        move_failed = True
+                    else:
+                        have_cleaned = True
+                        total_size += moved_size
 
     if have_cleaned:
         info('')
@@ -8048,6 +8055,8 @@ def cmd_clean(cleandir, dryrun, items=None):
         if not dryrun:
             info('orphaned items moved to: {}'.format(orphan_root_dir))
             save_manifest(items)
+    elif move_failed:
+        warn('nothing could be moved to the orphan folder: see the errors above.')
     else:
         info('nothing to clean. nice and tidy!')
 

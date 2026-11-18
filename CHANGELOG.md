@@ -31,6 +31,47 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.76 - 17.11.2026 - A game that can never be fetched is given up after a few retries (resume manifest)
+
+- **DIFFERENCE: a retry limit for the resume manifest (handover open item 5, "0.5.50 risk").** A game whose details could not be fetched stays in
+  the resume manifest so that the next update tries it again. That was for ever: while one game was pending, every `update` only resumed it and
+  **never got to the update that was asked for** (`resume completed` / `returning to specified download request` came only when nothing was
+  pending). A game whose details can never be fetched therefore held back all updates until `-resumemode noresume` was used by hand.
+- New setting **`resume_retry_count`** in `[settings]` (default **3**, 0 or more): a failed game is tried again by that many later updates, so the
+  first try plus 3 retries; the next failure gives it up. A game that is given up is removed from the pending list with a warning (`giving up on
+  'game_002' (id 1002) for now: its details could not be fetched 4 times in a row ...`), the resume manifest is complete, and the update that was
+  asked for follows in the same run. With 0 a game is given up at its first failure.
+- **The failure is never hidden.** Every failed try is in the run summary and the exit status is 1, as before. A game that was given up is not
+  retried by a resume pass any more, but every update that includes it (for example one that fetches games not in the manifest yet) tries it once and
+  reports the failure again, until it works. For that the count is kept: the properties record of the resume manifest holds `failure_counts` (game id as
+  text to number of failures in a row), also when the resume manifest is complete, and also with `-resumemode noresume`. A successful fetch removes
+  the game from it. An older resume manifest has no `failure_counts` and starts at 0. The ids are text on purpose: with number keys the manifest
+  did not read back identically from JSON and was saved in the old format with a warning (found by the new tests).
+- **Not changed:** while a game still has retries left, the resume pass comes first and the update that was asked for waits (up to 3 extra runs for a new
+  failure). An interrupted update (Ctrl-C) adds no failure. The first try counts: `resume_retry_count = 3` means 4 tries in all.
+- The final warning now names the limit (`a game is given up after 3 retries`). README: a short paragraph under `--resumemode`.
+- Tests: `tests/test_resume_retry_limit.py` (14 tests on a fake account API; the pending list, the counts in the manifest file, the exit status and
+  the update that follows are checked across several runs); `tests/test_config.py` checks the new constant with a config file and the default.
+  Thirteen mutations were all caught (one only after the config test was extended).
+
+## 0.5.75 - 17.11.2026 - `clean`: one place that orphans a file; the dry run counts a file marked for change
+
+- **Bug fixed (open item 7 of the handover): a dry run of `clean` did not count a file that the manifest marks as changed.** It printed `orphaning
+  file ... as it has been marked for change.` and then `nothing to clean. nice and tidy!`, with no total. It now counts the file and prints
+  `total size of newly orphaned files: ...` like for any other file. A dry run still moves and saves nothing.
+- **Refactoring (D9 of the handover): the two copies of the code that move a file to the orphan folder are one function** (`_orphan_game_file`).
+  The same files are chosen, in the same order, with the same messages, counts and exit status (the new tests that do not touch the bug pass on the
+  0.5.74 code as well). The files chosen are the same: a file that is unknown to the manifest can never be in the list of files marked for
+  change, so the two old conditions never both held and are now an if/elif.
+- **DIFFERENCE: a file that cannot be moved is reported, never a crash and never "nothing to clean".** Making the folder inside `!orphaned` used to be
+  outside the part of the code that catches errors (a crash with a traceback); it is inside now, and `exist_ok` is used. When nothing at all could be
+  moved the run says `nothing could be moved to the orphan folder: see the errors above.` instead of `nothing to clean. nice and tidy!`. In a
+  dry run a file that vanished meanwhile is a warning (`could not look at ...`), not a crash. A failed move is in the run summary and the exit status
+  is 1, as before.
+- `ensure_attribute(obj, name, default)` replaces the four `try/except AttributeError` blocks of `cmd_clean` (`folder_name`, `force_change`, `updated`,
+  `old_updated`; D1 of the handover). The other 43 places are not changed yet. The unused local `changed_item` is gone.
+- Tests: `tests/test_clean_orphaning.py` (15 tests). 17 mutations of the new code were all caught.
+
 ## 0.5.74 - 17.11.2026 - A login over an encrypted token file asks for the password twice; a timing test that does not depend on the computer
 
 - **DIFFERENCE: when the token is saved over an existing encrypted file and no password was typed earlier in the run (in practice: a login while

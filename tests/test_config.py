@@ -245,7 +245,7 @@ class SettingsReachTheProgramTests(ConfigTestCase):
         cfg = ('[settings]\nlog_max_mb = 7\nlog_backups = 2\nhttp_retry_count = 1\nhttp_retry_delay = 3\nhttp_timeout = 11\n'
                'http_no_retry_codes = 404, 410\ndownload_chunk_size = 2048\ndownload_threads = 3\nprogress_interval = 0.5\n'
                'resume_save_threshold = 9\nsummary_max_items = 4\nmax_listed_failures = 6\nfile_replace_attempts = 2\n'
-               'file_replace_delay = 0.01\n')
+               'file_replace_delay = 0.01\nresume_retry_count = 7\n')
         code = ("print([g.LOG_MAX_MB, g.LOG_BACKUPS, g.loggingHandler.maxBytes, g.loggingHandler.backupCount, g.HTTP_RETRY_COUNT,"
                 " g.HTTP_RETRY_DELAY, g.HTTP_TIMEOUT, g.HTTP_PERM_ERRORCODES, g.DOWNLOAD_CHUNK_SIZE, g.HTTP_GAME_DOWNLOADER_THREADS,"
                 " g.DOWNLOAD_PROGRESS_INTERVAL, g.RESUME_SAVE_THRESHOLD, g.SUMMARY_MAX_ITEMS, g.run_report.MAX_LISTED_FAILURES,"
@@ -253,19 +253,19 @@ class SettingsReachTheProgramTests(ConfigTestCase):
                 " inspect.signature(g.request_head).parameters['retries'].default,"
                 " inspect.signature(g.renew_token).parameters['retries'].default,"
                 " inspect.signature(g._replace_file).parameters['attempts'].default,"
-                " inspect.signature(g._replace_file).parameters['delay'].default])")
+                " inspect.signature(g._replace_file).parameters['delay'].default, g.RESUME_RETRY_COUNT])")
         result = self.run_python(code, cfg)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(),
-                         str([7, 2, 7 * 1024 * 1024, 2, 1, 3, 11, (404, 410), 2048, 3, 0.5, 9, 4, 6, 1, 1, 1, 2, 0.01]))
+                         str([7, 2, 7 * 1024 * 1024, 2, 1, 3, 11, (404, 410), 2048, 3, 0.5, 9, 4, 6, 1, 1, 1, 2, 0.01, 7]))
 
     def test_without_a_file_the_constants_are_the_old_ones(self):
         code = ("print([g.LOG_MAX_MB, g.LOG_BACKUPS, g.HTTP_RETRY_COUNT, g.HTTP_RETRY_DELAY, g.HTTP_TIMEOUT,"
                 " g.HTTP_PERM_ERRORCODES, g.DOWNLOAD_CHUNK_SIZE, g.HTTP_GAME_DOWNLOADER_THREADS, g.RESUME_SAVE_THRESHOLD,"
-                " g.SUMMARY_MAX_ITEMS, g.run_report.MAX_LISTED_FAILURES])")
+                " g.SUMMARY_MAX_ITEMS, g.run_report.MAX_LISTED_FAILURES, g.RESUME_RETRY_COUNT])")
         result = self.run_python(code)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), str([180, 9, 4, 5, 60, (404, 403), 65536, 4, 50, 15, 40]))
+        self.assertEqual(result.stdout.strip(), str([180, 9, 4, 5, 60, (404, 403), 65536, 4, 50, 15, 40, 3]))
         self.assertFalse(os.path.exists(self.path), 'importing must not create the file; only running the script does')
 
     def test_a_bad_setting_stops_the_program_with_a_clear_message(self):
