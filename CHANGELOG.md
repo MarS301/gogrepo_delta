@@ -31,6 +31,72 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.74 - 17.11.2026 - A login over an encrypted token file asks for the password twice; a timing test that does not depend on the computer
+
+- **DIFFERENCE: when the token is saved over an existing encrypted file and no password was typed earlier in the run (in practice: a login while
+  `gog-token.json` is encrypted), the password is now asked for twice, like any new password.** Before it was asked once and not checked, so a typo
+  silently set a password that nobody knew. The old file is replaced by the login, not opened, so there is nothing to check the password against; the
+  password may be the old one or a new one. A mismatch is asked again (up to 3 times at a terminal, see 0.5.72). After a read (an update, a refresh)
+  the password is known and nothing is asked, as before. This is the decision of 0.5.73, option A.
+- **Test fixed: `test_a_large_library_is_not_slow`** failed on the maintainer's Windows computer (15.04 seconds against a limit of 15; about 1.5 seconds
+  on the sandbox computer, so the computer was busy or slow, not the search). A limit in seconds can never be right for every computer. The test now
+  compares CPU time (not wall-clock time) for 500 and for 3000 games, best of three: 6 times the games must take less than 18 times as long (about 6
+  times is expected, a search that compares every game with every other would need about 36). A deliberately quadratic search fails it.
+- Other tests that measure seconds (`test_download_loop.py`, `test_review_fixes.py`, `test_wishlist.py`) check that a timeout or a retry does not
+  hang or repeat (limits of 4 and 5 seconds around waits of about a second); they were not changed. If one of them fails on a slow computer, tell me.
+- Tests: `test_token_fallback.py` (the "keeps its one prompt" test became "asks twice"), 5 more in `test_token_password_create.py`.
+
+## 0.5.73 - 17.11.2026 - Token file review: damaged files, limits, stronger keys
+
+- **DIFFERENCE: a damaged or unusable token file ends the run with one clear message, not a traceback.** A new `TokenFileError` (a `ValueError`, as
+  these errors always were) covers: a file that is not JSON or not a token file, a wrong format, version, encryption mode or key derivation, a
+  missing, not base64 or wrongly sized `salt`, `nonce` or `ciphertext`, key derivation values that are missing or not whole numbers, and a decrypted
+  content that is not a token. The message names the file, and the end of the run says `Delete gog-token.json and run the login command again, or
+  restore a copy of it.` All of this is checked **before** a password is asked for. A wrong password is still a `TokenPasswordError` with its own message.
+  Before, most of these ended with a raw `KeyError`, `binascii.Error`, `TypeError` or `JSONDecodeError` traceback.
+- **A token file cannot ask for unlimited memory or time.** The key derivation values read from a file must be: `kdf_n` a power of two from 2**14 to
+  2**20, `kdf_r` from 8 to 32, `kdf_p` from 1 to 16, and 128 * N * r at most 256 MiB (so with r = 8 the largest N is 2**18). Files this program wrote
+  (2**14, 8, 1) are far inside. The values are not authenticated by the encryption (its associated data is only the format name): a changed value can make
+  a file fail to open, never open with a different password; this is not changed, so as not to break existing files.
+- **A stronger key derivation can now be saved.** `hashlib.scrypt` was called with Python's default memory limit (32 MiB), which refuses N = 2**15
+  with r = 8: raising `_TOKEN_SCRYPT_N` would have made every save fail. The limit is now 257 MiB, in step with the limit for reading. `_token_key`
+  also takes its default values when it is called, not when it is defined, and the writer uses one set of values for the key and for the file.
+  Nothing changes for the default values.
+- **A plain save over an encrypted file is said aloud.** With `token_mode = plain` (or `GOGREPO_TOKEN_MODE=plain`) the next save of the token, also after
+  a refresh, replaces an encrypted file by readable text. It always did; now one warning says `... was encrypted and is now saved as readable plain
+  text, because the token mode is plain ...`. **Correction of 0.5.70:** its entry and the README said that an existing token file "is not converted"
+  and that an encrypted one is not replaced by a plain one unless you log in again. That was wrong; the README is corrected.
+- `import base64` is a normal import (it was `__import__('base64')` in three places).
+- Looked at and left as it is: the temporary file of a save is created in the same folder and replaced atomically (0600 on Linux and macOS; the
+  permission bits mean nothing on Windows, where the folder's own access rights apply); the password is asked once per process and cached.
+- **Not changed, decision for the maintainer:** when the token is saved over an existing encrypted file and no password was typed in this run (in
+  practice: a login while `gog-token.json` is encrypted) the password is asked once and is not checked against the old file, so a typo silently sets a
+  new password. The test `test_an_existing_encrypted_file_keeps_its_one_prompt` records that design. Options: ask twice (the old file is replaced
+  anyway), or check the typed password against the old file.
+- Tests: `tests/test_token_file_validation.py` (16 tests, among them the real `__main__` block with a `TokenFileError`). One test in
+  `tests/test_update_legacy_changelog_and_tokens.py` now expects `TokenFileError` instead of `JSONDecodeError` for a broken file. Nineteen mutations:
+  seventeen were caught (two only after a test was added); two are equivalent (the defaults of `_token_key` are always overridden by the writer).
+
+## 0.5.72 - 17.11.2026 - A new token password is asked for again; jitter in the retry waits
+
+- **A new token password that does not match is asked for again.** When a token file is created or encrypted (a first login, `token_mode =
+  encrypted` with a plain file, as in the real log where it happened in the middle of a token refresh), the password is typed twice. If the two do
+  not match, or nothing was typed, the program now says `The two passwords do not match. Please try again (1 of 3).` (or `The password must not be
+  empty. ...`) and asks again, up to 3 times (`TOKEN_PASSWORD_ATTEMPTS`, the same number as for a wrong password when a file is opened). Before, the
+  first mismatch ended the run with a traceback (`ValueError: Token passwords do not match`). After the third failure the error is raised as
+  before and nothing is remembered.
+- Without a terminal (a scheduled task, a pipe) there is still one attempt and the old errors, as for a wrong password.
+- **DIFFERENCE: jitter in the waits before a retry.** Every wait varies at random by up to 20 percent in both directions (`RETRY_JITTER = 0.2`):
+  with `http_retry_delay = 5` a wait is anything from 4 to 6 seconds. It applies to `request()`, `request_head()`, the token refresh and both
+  download loops (the chunk-verifying and the plain one), so threads that failed together do not all try again at the same moment. A `Retry-After`
+  of the server is never shortened: the wait is the longer of the jittered delay and `Retry-After`, as before. The retry messages name the wait that
+  is really made, rounded to one decimal (`will retry in 4.7s`; the download messages showed whole seconds). The number is a constant, not a setting
+  (a setting would be easy to add); the explanation of `http_retry_delay` in the config file mentions it.
+- Not done (decisions for the maintainer): growing waits (backoff).
+- Tests: `tests/test_token_password_create.py` (9 tests, one of them saves a refreshed token over a plain file with a mismatch first),
+  `tests/test_retry_jitter.py` (13 tests), two more in `tests/test_chunk_retry.py`. `tests/_bootstrap.py` switches the jitter off for all other
+  tests, which expect exact waits. Seventeen mutations were all caught (three only after a test was added).
+
 ## 0.5.71 - 17.11.2026 - A network problem ends the run with a friendly message
 
 - **DIFFERENCE: a run that a network problem stops no longer ends with a page of traceback.** It ends (exit status 1, as before) with one line, for

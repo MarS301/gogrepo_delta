@@ -241,13 +241,14 @@ class WithThePackageTests(Base):
                 g.save_token(TOKEN)
         self.assertEqual(self.digest(), before)
 
-    def test_an_existing_encrypted_file_keeps_its_one_prompt(self):
+    def test_a_save_over_an_existing_encrypted_file_without_a_known_password_asks_twice(self):
+        # 0.5.74: the old file is replaced, not opened, so the password is a new one and is typed twice (it used to be asked once and not checked)
         with mock.patch.object(g.getpass, 'getpass', side_effect=['pw', 'pw']):
             g.save_token(TOKEN)
         g._forget_token_password()
-        with mock.patch.object(g.getpass, 'getpass', side_effect=['pw']) as prompt:
+        with mock.patch.object(g.getpass, 'getpass', side_effect=['pw', 'pw']) as prompt:
             g.save_token(dict(TOKEN, access_token='second'))
-        self.assertEqual(prompt.call_count, 1)
+        self.assertEqual(prompt.call_count, 2)
 
     def test_with_the_package_there_is_no_warning_and_no_fallback_even_for_the_plain_default(self):
         with mock.patch.object(g.getpass, 'getpass', side_effect=['pw', 'pw']):

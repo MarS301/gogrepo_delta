@@ -35,6 +35,7 @@ if 'gogrepo_delta' not in sys.modules:
 # The script logs to the console while it runs; that is only noise between test results. Tests that check log
 # output (assertLogs, the download rig) attach their own handlers and are not affected.
 gogrepoc = sys.modules['gogrepo_delta']   # the name gogrepoc is kept in the tests as a short alias
+gogrepoc.RETRY_JITTER = 0   # the waits before a retry vary by up to 20 percent in the program; the tests expect exact waits (tests of the jitter set it themselves)
 gogrepoc.rootLogger.removeHandler(gogrepoc.consoleHandler)
 gogrepoc.rootLogger.addHandler(__import__('logging').NullHandler())   # no handler would make Python print warnings to stderr
 

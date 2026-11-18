@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.71'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.74'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -39,6 +39,8 @@ import logging
 import html5lib
 import pprint
 import time
+import random
+import base64
 import zipfile
 import hashlib
 import getpass
@@ -181,7 +183,7 @@ SETTING_GROUPS = [
     (('log_max_mb', 'log_backups'),
      'log file gogrepo.log: size in MB at which a new file is started; how many old files are kept'),
     (('http_retry_count', 'http_retry_delay', 'http_timeout'),
-     'requests to GOG: retries after a failure; seconds between tries (the original code warns that less than about 10 '
+     'requests to GOG: retries after a failure; seconds between tries, each of them varied at random by up to 20 percent (the original code warns that less than about 10 '
      'seconds between the first and third try gives error 503); seconds without an answer or data before giving up'),
     (('http_no_retry_codes',),
      'HTTP error codes that are final and not retried (503 is left out on purpose: the original code notes that GOG uses '
@@ -842,8 +844,16 @@ _RETRYABLE_REQUEST_ERRORS = (requests.HTTPError, requests.URLRequired, requests.
                              requests.exceptions.SSLError, requests.exceptions.ChunkedEncodingError)
 
 def _seconds_text(seconds):
-    """'5' for 5 and 2.5 for 2.5 (the retry messages used %d, which showed a decimal setting wrongly)."""
-    return '%g' % seconds
+    """'5' for 5, '2.5' for 2.5 and '4.7' for 4.73918: at most one decimal (the retry messages used %d, which showed a decimal setting wrongly)."""
+    return ('%.1f' % seconds).rstrip('0').rstrip('.')
+
+RETRY_JITTER = 0.2     # every wait before a retry is HTTP_RETRY_DELAY plus or minus up to this fraction (0.2: 5 s becomes anything from 4 to 6 s)
+
+def _jittered(seconds):
+    """seconds, varied at random by up to RETRY_JITTER in both directions, so that threads that failed together do not all try again together."""
+    if RETRY_JITTER <= 0 or seconds <= 0:
+        return seconds
+    return seconds * random.uniform(1 - RETRY_JITTER, 1 + RETRY_JITTER)
 
 def _retry_after_seconds(response):
     """The wait (in seconds) that a Retry-After header asks for, as a number or an HTTP date; None if absent or unusable.
@@ -870,8 +880,9 @@ def _retry_after_seconds(response):
     return min(seconds, RETRY_AFTER_MAX)
 
 def _retry_wait(error_):
-    """How long to wait before trying again: HTTP_RETRY_DELAY, or longer if the server's Retry-After asks for more."""
-    wait = HTTP_RETRY_DELAY
+    """How long to wait before trying again: HTTP_RETRY_DELAY varied by up to 20 percent (_jittered), or the server's Retry-After if that is
+    longer (never shortened: the server asked for at least that)."""
+    wait = _jittered(HTTP_RETRY_DELAY)
     response = getattr(error_, 'response', None)
     if response is not None:                  # not "if response": a Response is false for an error status
         asked = _retry_after_seconds(response)
@@ -4414,6 +4425,10 @@ _TOKEN_ENVELOPE_VERSION = 1
 _TOKEN_SCRYPT_N = 2 ** 14
 _TOKEN_SCRYPT_R = 8
 _TOKEN_SCRYPT_P = 1
+# What a token file may ask for when it is read. The parameters sit in the file, so a damaged or edited file could ask for any amount of
+# memory or time (or for a value that makes scrypt fail with an unreadable message). Memory is about 128 * N * r bytes.
+_TOKEN_SCRYPT_MAX_MEMORY = 256 * 1024 * 1024
+_TOKEN_SCRYPT_LIMITS = {'kdf_n': (2 ** 14, 2 ** 20), 'kdf_r': (8, 32), 'kdf_p': (1, 16)}     # smallest and largest value of each
 
 
 def _token_mode():
@@ -4425,6 +4440,11 @@ def _token_mode():
     if mode not in ('encrypted', 'plain'):
         raise ValueError('%s must be "encrypted" or "plain"' % TOKEN_MODE_ENV)
     return mode
+
+
+class TokenFileError(ValueError):
+    """The token file is damaged, not a token file of this program, or of a version this program does not know. A ValueError, as these
+    errors always were; the class lets the top level print the message without a traceback."""
 
 
 class TokenModuleMissing(RuntimeError):
@@ -4518,12 +4538,21 @@ def _token_password(create=False):
     global _TOKEN_PASSWORD
     if _TOKEN_PASSWORD is None:
         if create:
-            first = getpass.getpass('Create password for gog-token.json: ')
-            second = getpass.getpass('Confirm token password: ')
-            if not first:
-                raise ValueError('Token password must not be empty')
-            if first != second:
-                raise ValueError('Token passwords do not match')
+            # A new password is typed twice. If the two do not match (or nothing was typed) it is asked for again, up to
+            # TOKEN_PASSWORD_ATTEMPTS times, when someone is at a terminal to type it; otherwise one attempt and the error, as before.
+            attempts = TOKEN_PASSWORD_ATTEMPTS if _can_prompt_again() else 1
+            for attempt in range(1, attempts + 1):
+                first = getpass.getpass('Create password for gog-token.json: ')
+                second = getpass.getpass('Confirm token password: ')
+                if not first:
+                    problem, failure = 'The password must not be empty.', 'Token password must not be empty'
+                elif first != second:
+                    problem, failure = 'The two passwords do not match.', 'Token passwords do not match'
+                else:
+                    break
+                if attempt == attempts:
+                    raise ValueError(failure)
+                error('%s Please try again (%d of %d).' % (problem, attempt, attempts))
             _TOKEN_PASSWORD = first
         else:
             typed = getpass.getpass('Password for gog-token.json: ')
@@ -4533,8 +4562,38 @@ def _token_password(create=False):
     return _TOKEN_PASSWORD
 
 
-def _token_key(password, salt, n=_TOKEN_SCRYPT_N, r=_TOKEN_SCRYPT_R, p=_TOKEN_SCRYPT_P):
-    return hashlib.scrypt(password.encode('utf-8'), salt=salt, n=n, r=r, p=p, dklen=32)
+def _token_key(password, salt, n=None, r=None, p=None):
+    n, r, p = n or _TOKEN_SCRYPT_N, r or _TOKEN_SCRYPT_R, p or _TOKEN_SCRYPT_P      # looked up now, not when the function was defined
+    # maxmem is passed on purpose: the default of Python (32 MiB) refuses N = 2**15 with r = 8, so a stronger setting would fail to save
+    return hashlib.scrypt(password.encode('utf-8'), salt=salt, n=n, r=r, p=p, dklen=32, maxmem=_TOKEN_SCRYPT_MAX_MEMORY + 1024 * 1024)
+
+
+def _token_kdf_parameters(envelope, filepath):
+    """(n, r, p) from a token file, or a TokenFileError if a value is missing, not a whole number, or outside what this program accepts."""
+    values = []
+    for key in ('kdf_n', 'kdf_r', 'kdf_p'):
+        value = envelope.get(key)
+        low, high = _TOKEN_SCRYPT_LIMITS[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            raise TokenFileError('%s is not usable: %s must be a whole number from %d to %d (it is %r)' % (filepath, key, low, high, value))
+        values.append(value)
+    n, r, p = values
+    if n & (n - 1):
+        raise TokenFileError('%s is not usable: kdf_n must be a power of two (it is %d)' % (filepath, n))
+    if 128 * n * r > _TOKEN_SCRYPT_MAX_MEMORY:
+        raise TokenFileError('%s is not usable: its key derivation would need more than %d MiB of memory' % (filepath, _TOKEN_SCRYPT_MAX_MEMORY // 2 ** 20))
+    return n, r, p
+
+
+def _token_field(envelope, key, size, filepath):
+    """The base64 field `key` of a token file as bytes (of exactly `size` bytes if given), or a TokenFileError."""
+    try:
+        value = base64.b64decode(envelope[key], validate=True)
+    except (KeyError, TypeError, ValueError):       # missing, not text, or not base64 (binascii.Error is a ValueError)
+        raise TokenFileError('%s is not usable: %s is missing or damaged' % (filepath, key))
+    if (size is not None and len(value) != size) or not value:
+        raise TokenFileError('%s is not usable: %s has the wrong length' % (filepath, key))
+    return value
 
 
 def _write_token_json(token, filepath):
@@ -4546,51 +4605,59 @@ def _write_token_json(token, filepath):
         'encryption': mode,
     }
     if mode == 'plain':
+        if state == 'encrypted':
+            warn('%s was encrypted and is now saved as readable plain text, because the token mode is plain (token_mode in the config file or '
+                 '%s). Set it to encrypted and log in again to get an encrypted file again.' % (filepath, TOKEN_MODE_ENV))
         envelope['token'] = token
     else:
         AESGCM = _token_crypto()
         salt = os.urandom(16)
         nonce = os.urandom(12)
-        password = _token_password(create=(state != 'encrypted'))       # a new password is asked twice, also when a plain file is encrypted now
-        key = _token_key(password, salt)
+        # A password that was not typed earlier in this run (nothing was read: a login) is a NEW password and is asked for twice, also over an
+        # existing encrypted file: that file is replaced, not opened, so a single typo could set a password that nobody knows. After a
+        # read (an update, a refresh) the password is already known and nothing is asked.
+        password = _token_password(create=True)
+        n, r, p = _TOKEN_SCRYPT_N, _TOKEN_SCRYPT_R, _TOKEN_SCRYPT_P         # the values that make the key are the ones written to the file
+        key = _token_key(password, salt, n, r, p)
         ciphertext = AESGCM(key).encrypt(nonce, json.dumps(token, separators=(',', ':')).encode('utf-8'),
                                          _TOKEN_ENVELOPE_FORMAT.encode('ascii'))
         envelope.update({
             'kdf': 'scrypt',
-            'kdf_n': _TOKEN_SCRYPT_N,
-            'kdf_r': _TOKEN_SCRYPT_R,
-            'kdf_p': _TOKEN_SCRYPT_P,
-            'salt': __import__('base64').b64encode(salt).decode('ascii'),
-            'nonce': __import__('base64').b64encode(nonce).decode('ascii'),
-            'ciphertext': __import__('base64').b64encode(ciphertext).decode('ascii'),
+            'kdf_n': n,
+            'kdf_r': r,
+            'kdf_p': p,
+            'salt': base64.b64encode(salt).decode('ascii'),
+            'nonce': base64.b64encode(nonce).decode('ascii'),
+            'ciphertext': base64.b64encode(ciphertext).decode('ascii'),
         })
     atomic_write_text(filepath, lambda w: json.dump(envelope, w, indent=2, sort_keys=True), mode=0o600)
 
 
 def _read_token_json(filepath):
-    with open(filepath, mode='r', encoding='utf-8') as r:
-        envelope = json.load(r)
+    try:
+        with open(filepath, mode='r', encoding='utf-8') as r:
+            envelope = json.load(r)
+    except ValueError:                                  # not JSON (and not valid UTF-8: UnicodeDecodeError is a ValueError)
+        raise TokenFileError('%s is damaged: it is not a token file' % filepath)
     if not isinstance(envelope, dict) or envelope.get('format') != _TOKEN_ENVELOPE_FORMAT:
-        raise ValueError('unrecognised token file format in %s' % filepath)
+        raise TokenFileError('unrecognised token file format in %s' % filepath)
     if envelope.get('version') != _TOKEN_ENVELOPE_VERSION:
-        raise ValueError('unsupported token file version in %s' % filepath)
+        raise TokenFileError('unsupported token file version in %s' % filepath)
     encryption = envelope.get('encryption')
     if encryption == 'plain':
         token = envelope.get('token')
     elif encryption == 'encrypted':
         if envelope.get('kdf') != 'scrypt':
-            raise ValueError('unsupported token key derivation function')
+            raise TokenFileError('%s is not usable: unsupported key derivation function' % filepath)
         try:
             AESGCM = _token_crypto()
         except TokenModuleMissing:
             raise TokenModuleMissing('%s is encrypted, but the "cryptography" package that opens it is not installed. Install it with: '
                                      'python -m pip install cryptography' % filepath)
-        import base64
-        salt = base64.b64decode(envelope['salt'], validate=True)
-        nonce = base64.b64decode(envelope['nonce'], validate=True)
-        ciphertext = base64.b64decode(envelope['ciphertext'], validate=True)
-        if len(salt) != 16 or len(nonce) != 12:
-            raise ValueError('invalid encrypted token parameters')
+        salt = _token_field(envelope, 'salt', 16, filepath)
+        nonce = _token_field(envelope, 'nonce', 12, filepath)
+        ciphertext = _token_field(envelope, 'ciphertext', None, filepath)
+        n, r, p = _token_kdf_parameters(envelope, filepath)     # checked before any password is asked for
         # A wrong (or empty) password is asked for again, up to TOKEN_PASSWORD_ATTEMPTS times, if there is a terminal; otherwise one attempt.
         attempts = TOKEN_PASSWORD_ATTEMPTS if _can_prompt_again() else 1
         for attempt in range(1, attempts + 1):
@@ -4601,7 +4668,7 @@ def _read_token_json(filepath):
                     raise
                 error('The password must not be empty. Please try again (%d of %d).' % (attempt, attempts))
                 continue
-            key = _token_key(password, salt, int(envelope['kdf_n']), int(envelope['kdf_r']), int(envelope['kdf_p']))
+            key = _token_key(password, salt, n, r, p)
             try:
                 plaintext = AESGCM(key).decrypt(nonce, ciphertext, _TOKEN_ENVELOPE_FORMAT.encode('ascii'))
                 break
@@ -4611,11 +4678,14 @@ def _read_token_json(filepath):
                     # Do not fall back to the legacy token file on a bad password or damaged ciphertext.
                     raise TokenPasswordError('could not decrypt token file (wrong password or damaged file)')
                 error('Wrong password. Please try again (%d of %d).' % (attempt, attempts))
-        token = json.loads(plaintext.decode('utf-8'))
+        try:
+            token = json.loads(plaintext.decode('utf-8'))
+        except ValueError:
+            raise TokenFileError('%s is damaged: what it holds is not a token' % filepath)
     else:
-        raise ValueError('unsupported token encryption mode: %r' % encryption)
+        raise TokenFileError('%s is not usable: unsupported token encryption mode %r' % (filepath, encryption))
     if not isinstance(token, dict):
-        raise ValueError('token file does not contain a JSON object')
+        raise TokenFileError('%s is not usable: it does not contain a token' % filepath)
     return token
 
 
@@ -6299,8 +6369,9 @@ def _download_with_chunk_verification(job, tid, href, path, downloading_path, sz
                                             with job.lock:
                                                 job.sizes[path] += dlsz
                                             if (retries > 0):
-                                                warn("failed to download %s, byte_range=%s (%d retries left) -- will retry in %ds..." % (os.path.basename(path), str(se),retries,HTTP_RETRY_DELAY))
-                                                time.sleep(HTTP_RETRY_DELAY)     # as the plain download loop does (this one does not hold job.lock meanwhile)
+                                                wait = _jittered(HTTP_RETRY_DELAY)
+                                                warn("failed to download %s, byte_range=%s (%d retries left) -- will retry in %ss..." % (os.path.basename(path), str(se),retries,_seconds_text(wait)))
+                                                time.sleep(wait)     # as the plain download loop does (this one does not hold job.lock meanwhile)
                                             else:
                                                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
                                                 succeed = succeed and False;
@@ -6349,16 +6420,17 @@ def _download_without_chunk_verification(job, tid, href, path, downloading_path,
                         downloadSuccess= True;
                         succeed = True
                     else:
+                        wait = _jittered(HTTP_RETRY_DELAY)
                         with job.lock:
                             job.sizes[path] += dlsz
                             if retries > 0:
-                                warn("failed to download %s, byte_range=%s (%d retries left) -- will retry in %ds..." % (os.path.basename(path), str(se), retries, HTTP_RETRY_DELAY))
+                                warn("failed to download %s, byte_range=%s (%d retries left) -- will retry in %ss..." % (os.path.basename(path), str(se), retries, _seconds_text(wait)))
                             else:
                                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
                                 succeed = False
                             retries -= 1
                         if retries >= 0:
-                            time.sleep(HTTP_RETRY_DELAY)
+                            time.sleep(wait)
             except requests.HTTPError as e:
                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
                 succeed = False
@@ -8493,6 +8565,10 @@ if __name__ == "__main__":
         sys.exit(1)
     except TokenModuleMissing as e:
         error('%s' % e)         # no traceback: the message says what to install
+        sys.exit(1)
+    except TokenFileError as e:
+        error('%s' % e)         # no traceback: the file is damaged, not the program
+        error('Delete %s and run the login command again, or restore a copy of it.' % TOKEN_FILENAME)
         sys.exit(1)
     except requests.exceptions.RequestException as e:
         log_fatal_request_error(e)      # a network problem: a friendly line instead of a traceback (the traceback with -debug)

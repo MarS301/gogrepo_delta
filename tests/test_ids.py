@@ -242,11 +242,24 @@ class SuggestTests(unittest.TestCase):
         self.assertEqual(self.titles('\u304b\u3063\u3053'), ['kakkou'])
 
     def test_a_large_library_is_not_slow(self):
+        # Not a number of seconds (that depends on the computer and on what else it is doing: it failed once with 15.04 against 15):
+        # the time must grow about in step with the number of games. 6 times the games take about 6 times as long; a search that compares
+        # every game with every other game would need about 36 times. CPU time, not wall-clock time, and the best of three runs.
         import time
-        big = [make_game(i, 'game_number_%d_of_the_big_library' % i, 'Game Number %d of the Big Library' % i) for i in range(3000)]
-        start = time.time()
-        g.suggest_games(big, 'game numbr 2999 of the big libary')
-        self.assertLess(time.time() - start, 15)
+
+        def cost(count):
+            games = [make_game(i, 'game_number_%d_of_the_big_library' % i, 'Game Number %d of the Big Library' % i) for i in range(count)]
+            best = None
+            for _ in range(3):
+                start = time.process_time()
+                found = g.suggest_games(games, 'game numbr %d of the big libary' % (count - 1))
+                took = time.process_time() - start
+                best = took if best is None else min(best, took)
+            self.assertTrue(found)
+            return best
+
+        small, large = cost(500), cost(3000)
+        self.assertLess(large, max(small, 0.05) * 18, 'a library of 3000 games took %.2f s, one of 500 games %.2f s' % (large, small))
 
 
 class SearchTests(unittest.TestCase):
