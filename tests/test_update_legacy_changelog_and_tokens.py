@@ -8,6 +8,7 @@ from unittest import mock
 
 import _bootstrap  # noqa: F401
 import gogrepo_delta as gog
+from _bootstrap import has_cryptography
 
 
 class WorkingDirectory(unittest.TestCase):
@@ -46,6 +47,7 @@ class HandleGameUpdatesRegression(WorkingDirectory):
 
 
 class TokenStoreTests(WorkingDirectory):
+    @unittest.skipUnless(has_cryptography(), 'needs the cryptography package')
     def test_encrypted_json_round_trip_and_password_prompt_once(self):
         os.environ.pop(gog.TOKEN_MODE_ENV, None)
         with mock.patch.object(gog.getpass, 'getpass', side_effect=['secret-pass', 'secret-pass', 'secret-pass']) as prompt:
@@ -86,6 +88,7 @@ class TokenStoreTests(WorkingDirectory):
         with self.assertRaises(gog.TokenFileError):      # a ValueError with a clear message (it was a bare JSONDecodeError)
             gog.load_token()
 
+    @unittest.skipUnless(has_cryptography(), 'needs the cryptography package')
     def test_wrong_password_does_not_fall_back_to_legacy_file(self):
         os.environ.pop(gog.TOKEN_MODE_ENV, None)
         with mock.patch.object(gog.getpass, 'getpass', return_value='right-password'):

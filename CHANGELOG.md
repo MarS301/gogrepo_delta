@@ -31,6 +31,39 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.77 - 17.11.2026 - CI and packaging: more Python versions, a required-packages-only job, requirements files, .gitattributes, .editorconfig
+
+- **The tests now run on Python 3.10, 3.11, 3.12, 3.13 and 3.14** (the README says 3.10 or newer; the release binaries are built with 3.14). Python 3.10 and 3.14
+  run on Ubuntu, Windows and macOS as before, 3.11 to 3.13 on Ubuntu only (nine jobs instead of six). 3.8 and 3.9 stay "best effort, not tested", as
+  the README says; a test job for them would need a decision of the maintainer (they cannot be tried in the sandbox this was made in).
+- **New CI job `Required packages only / Python 3.10`:** it installs only `html5lib`, `requests`, `psutil` and `pytest` and runs the whole suite, so
+  that an optional package (`cryptography`, `blake3`, `html2text`, PyObjC) cannot become a requirement without anybody noticing. The main jobs install
+  everything, so the tests of the encrypted token, BLAKE3 and the changelog text run for real there. The job found a real problem at once:
+- **Tests fixed: 10 tests failed without the `cryptography` package** (`PasswordRetryTests` in `test_token_password.py` and two tests in
+  `test_update_legacy_changelog_and_tokens.py`). They test the password prompts of an encrypted token file and cannot work without it. They are now
+  skipped without the package, like the tests added since 0.5.73. The whole suite has been run with `cryptography`, `blake3` and `html2text`
+  made unimportable: no failure, 38 skipped (2 of them are skipped with all packages). (`has_cryptography()` is in `tests/_bootstrap.py` now.)
+- **`requirements.txt`, `requirements-optional.txt` and `requirements-dev.txt`.** Required packages, the optional ones (with `html2text>=2015.6.21` and PyObjC only on
+  macOS) and everything for the tests. `tests.yml` installs from them instead of its own list (it was missing `html2text`; the release build has it).
+  `pip` caching is on. The README names the files. `build.yml` is **not changed** (it cannot be tried outside GitHub and is not part of this entry);
+  a test compares the packages it installs with the requirements files, so the two cannot drift apart unnoticed.
+- **`.gitattributes`: text files are LF in the repository and in every checkout** (`* text=auto eol=lf`). A checkout with CRLF is what made patches fail on
+  whitespace. **One step on the maintainer's computer after this change:** `git add --renormalize .` and commit what it shows (nothing, if the
+  repository already has LF everywhere, as the archive of 0.5.76 has); the working files of a Windows checkout turn LF the next time git rewrites them
+  (`git rm --cached -r . && git reset --hard`, after committing or saving your work).
+- **`.editorconfig`:** UTF-8, LF, final newline, no trailing whitespace (not in Markdown, where two spaces are a line break), 4 spaces (2 in YAML and JSON).
+  The program, the tests and the new files already follow it (a test checks that), so saving a file in an editor that reads it changes nothing.
+- `tests.yml`: a time limit of 30 minutes for every job (a hanging test must not run for hours) and `concurrency`, so that a new push stops the
+  run of the old one.
+- **Tests:** `tests/test_repo_files.py` (17 tests): the workflows are valid YAML; one version of `actions/checkout` and `actions/setup-python` in both
+  workflows; the test matrix has the oldest Python of the README and the newest is the one of the release build; every operating system of the release
+  is tested; every job has a time limit; `tests.yml` has no package list of its own; the required-only job has no optional file; `build.yml` installs
+  exactly the packages of the requirements files (plus `pyinstaller`); no package twice; every package the program imports at start is in
+  `requirements.txt` and none of the optional ones is imported at start; the README names every package and the requirements files; `.gitattributes`
+  and `.editorconfig` hold their rules; the program, the tests and the new files have no tabs, no trailing whitespace and a final newline. 17 mutations
+  of these files were all caught (one only after the test looked at the main job alone).
+- Not done: `build.yml` is unchanged (see above); no pinning of the actions to commit hashes and no `dependabot.yml` (both are decisions of the maintainer).
+
 ## 0.5.76 - 17.11.2026 - A game that can never be fetched is given up after a few retries (resume manifest)
 
 - **DIFFERENCE: a retry limit for the resume manifest (handover open item 5, "0.5.50 risk").** A game whose details could not be fetched stays in

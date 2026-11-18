@@ -1,0 +1,4 @@
+# The packages gogrepo_delta.py needs to start. Install them with:  python -m pip install -r requirements.txt
+html5lib
+requests
+psutil

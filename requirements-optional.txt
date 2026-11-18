@@ -1,0 +1,7 @@
+# Packages that add something but are not needed to start or to run the tests. Install them with:
+#   python -m pip install -r requirements-optional.txt
+cryptography                                    # password-encrypted login token (strongly recommended; without it the token is plain text)
+blake3                                          # BLAKE3 checksums for download and verify
+html2text>=2015.6.21                            # changelogs as readable text
+pyobjc-framework-Cocoa; sys_platform == "darwin"    # macOS: keeps the Mac awake during long runs
+# Linux: PyQt5 with QtDBus can inhibit sleep in a desktop session; it is large, so it is not listed here (see the README).

@@ -1,0 +1,4 @@
+# Everything the tests use: the required and the optional packages, and pytest (the tests also run with python -m unittest).
+-r requirements.txt
+-r requirements-optional.txt
+pytest

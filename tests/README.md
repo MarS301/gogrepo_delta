@@ -6,7 +6,7 @@ Run from the folder that contains `gogrepo_delta.py`:
     python -m unittest discover -s tests -p "test_[a-ce-z]*.py"   # fast tests only (< 1 second)
 
 No network or GOG account is needed, and the results do not depend on the operating system: the download rig fakes the platform (Linux, Windows or macOS) and `os.posix_fallocate` itself, so the same tests run on Windows, macOS and Linux. `requests` is required (like the script itself); if `html5lib` or
-`psutil` are missing, empty stand-ins are used so the tests can still run.
+`psutil` are missing, empty stand-ins are used so the tests can still run. The tests do not need the optional packages either (`cryptography`, `blake3`, `html2text`, PyObjC): the tests that need one of them are skipped without it, and the CI has a job that runs the whole suite with the required packages only (`python -m pip install -r requirements.txt pytest`).
 
 The tests run inside a scratch folder that is removed afterwards (`_bootstrap.py`), so it is safe to start them from any folder, also one that holds a real library and its `gog-manifest.dat`.
 
@@ -49,6 +49,7 @@ The tests run inside a scratch folder that is removed afterwards (`_bootstrap.py
 | test_update_saves | cmd_update save frequency and Ctrl-C handling against a fake GOG account API |
 | test_download_loop | the download read loop: stall watchdog, 64 KB reads, no thread per chunk |
 | test_download | cmd_download end to end against a local fake GOG server |
+| test_repo_files | the files around the program agree with each other and with the program: the workflows (one version of each action, the Python versions of the test matrix against the README and the release build, a time limit for every job, a job with the required packages only), the `requirements*.txt` files (against `build.yml`, the README and the imports of the program: nothing optional is imported at start), `.gitattributes` and `.editorconfig`. Skipped without a `.github` folder |
 
 ## download_rig/
 

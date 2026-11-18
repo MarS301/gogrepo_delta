@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 import _bootstrap  # noqa: F401
 import gogrepo_delta as g
+from _bootstrap import has_cryptography
 
 
 class Capture(logging.Handler):
@@ -21,6 +22,7 @@ class Capture(logging.Handler):
         return [r.getMessage() for r in self.records if r.levelname == 'ERROR']
 
 
+@unittest.skipUnless(has_cryptography(), 'needs the cryptography package')
 class PasswordRetryTests(unittest.TestCase):
     def setUp(self):
         self.cwd, self.dir = os.getcwd(), tempfile.mkdtemp(prefix='tok_')
