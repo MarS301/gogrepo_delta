@@ -1,0 +1,11 @@
+# Text files are stored with LF in the repository and checked out with LF on every platform, so that a patch made on one system applies on
+# another (a checkout with CRLF made `git apply` and `patch` fail on whitespace). Git decides by itself which files are text.
+* text=auto eol=lf
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.txt  text eol=lf
+*.cfg  text eol=lf
+*.json text eol=lf
+*.xml  text eol=lf

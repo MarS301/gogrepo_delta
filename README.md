@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.76-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.77-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -48,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.76` |
+| **Current version** | `v0.5.77` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -135,6 +135,8 @@ Install the required packages, plus `cryptography`, which is optional but strong
 ```bash
 python -m pip install html5lib requests psutil cryptography
 ```
+
+The repository lists the same packages in files, so that you do not have to type them: `python -m pip install -r requirements.txt` installs the required packages, and `python -m pip install -r requirements-optional.txt` all the optional ones (`cryptography`, `blake3`, `html2text` and, on macOS, PyObjC).
 
 Download `gogrepo_delta.py` into a working directory and run it with Python:
 

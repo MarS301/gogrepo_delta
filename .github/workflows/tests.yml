@@ -11,10 +11,16 @@ on:
 permissions:
   contents: read
 
+# A new push to the same branch or pull request makes the run that is still going obsolete.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30      # a test that hangs must not run for hours
 
     strategy:
       fail-fast: false
@@ -24,8 +30,16 @@ jobs:
           - windows-latest
           - macos-latest
         python-version:
-          - "3.10"
-          - "3.14"
+          - "3.10"           # the oldest supported version (README)
+          - "3.14"           # the version of the release binaries (build.yml)
+        include:
+          # The versions in between: one operating system is enough.
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
 
     steps:
       - name: Check out repository
@@ -35,18 +49,44 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
 
+      # The required and the optional packages (with the optional ones, the tests of the encrypted token, BLAKE3 and the changelog text
+      # run for real), pytest, and on macOS PyObjC.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install html5lib requests psutil pytest cryptography blake3
-
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: python -m pip install pyobjc-framework-Cocoa
+          python -m pip install -r requirements-dev.txt
 
       - name: Check Python syntax
         run: python -m compileall -q gogrepo_delta.py
+
+      - name: Run tests
+        run: python -m pytest -q tests
+
+  # Only what the program needs to start. The optional packages (cryptography, blake3, html2text, PyObjC) must stay optional: this job
+  # fails if a test or the program needs one of them without saying so.
+  required-packages-only:
+    name: Required packages only / Python 3.10
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install the required packages and pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
 
       - name: Run tests
         run: python -m pytest -q tests
