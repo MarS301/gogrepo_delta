@@ -120,18 +120,20 @@ class WorkflowTests(unittest.TestCase):
     def test_jobs_have_a_time_limit(self):
         self.assertEqual(self.tests_yml.count('runs-on:'), self.tests_yml.count('timeout-minutes:'))
 
-    def test_python_3_9_has_a_job_that_is_allowed_to_fail_and_it_is_the_only_one(self):
-        job = job_block(self.tests_yml, 'python-3-9')
-        self.assertRegex(job, r'python-version: "3\.9"')
+    def test_python_3_8_and_3_9_have_a_job_that_is_allowed_to_fail_and_it_is_the_only_one(self):
+        job = job_block(self.tests_yml, 'best-effort')
+        self.assertEqual({'3.8', '3.9'}, set(re.findall(r'^\s*-\s*"(\d+\.\d+)"', job, re.M)))
         self.assertRegex(job, r'(?m)^    continue-on-error: true$')
         self.assertIn('timeout-minutes:', job)
-        self.assertEqual(1, self.tests_yml.count('continue-on-error'), 'only the job for the best effort version may fail without failing the run')
+        self.assertRegex(job, r'(?m)^      fail-fast: false$')            # a failure on 3.8 must not cancel the run on 3.9
+        self.assertRegex(job, r'(?m)^    runs-on: ubuntu-24\.04$')         # ubuntu-latest could not provide Python 3.9
+        self.assertEqual(1, self.tests_yml.count('continue-on-error'), 'only the job for the best effort versions may fail without failing the run')
         for other in ('test', 'required-packages-only'):
             self.assertNotIn('continue-on-error', job_block(self.tests_yml, other))
         main_versions = re.findall(r'"(\d+\.\d+)"', job_block(self.tests_yml, 'test'))
-        self.assertNotIn('3.9', main_versions)
+        self.assertFalse({'3.8', '3.9'} & set(main_versions), 'the main matrix must not carry them: a failure there would fail the run')
 
-    def test_the_readme_calls_python_3_9_best_effort(self):
+    def test_the_readme_calls_python_3_8_and_3_9_best_effort(self):
         lines = [l for l in read('README.md').splitlines() if '3.8' in l and '3.9' in l]
         self.assertEqual(2, len(lines), 'the table and the list of requirements both say what is true of Python 3.8 and 3.9')
         for line in lines:

@@ -31,6 +31,29 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.80 - 18.11.2026 - What the Python 3.9 job found: old-format manifests could not be read on Python 3.8 and 3.9
+
+- **Bug fixed (found by the first run of the best-effort job on Python 3.9): `_load_legacy_literal` raised `IndentationError` on Python 3.8 and 3.9.** It reads the
+  old pprint/`AttrDict` manifest format by removing the `AttrDict(**` ... `)` wrapper and calling `ast.literal_eval`. The removed wrapper leaves spaces in front of
+  the text; Python 3.10 and newer ignore leading spaces and tabs, 3.8 and 3.9 do not. So a manifest in the old format (and other old-format files read this way) could
+  not be loaded on 3.8 or 3.9, which the README promises to start (best effort). The text is stripped before `literal_eval` now; what is not a plain literal is still
+  refused (`__import__(...)`, calls, attribute access).
+- **Three more of the four failures were in the tests, not in the program:** `assertNoLogs` exists only from Python 3.10 (`tests/_bootstrap.py` has a stand-in that is
+  installed only where the real one is missing), and the two Unicode tests compared the whole stderr of a child process with an empty text although the program prints
+  its one-line warning on a Python older than 3.10 (`without_old_python_warning` removes exactly that line and nothing else).
+- **The best-effort job now tries Python 3.8 as well as 3.9** (the README lists both; it was set up for 3.9 only, and the maintainer pointed out that 3.8 is still
+  offered by the runners). Job `best-effort`, a matrix of 3.8 and 3.9 with `fail-fast: false`, still the only job with `continue-on-error: true`. It runs on
+  **`ubuntu-24.04`, not `ubuntu-latest`**: the first run showed that `ubuntu-latest` could not provide Python 3.9 (change made by the maintainer, now in the file with the
+  reason). 3.8 could not be tried in the sandbox this was made in (it has Python 3.12 only): a static check of the program and the tests found no syntax and no
+  library call newer than 3.8 apart from those named above, but the first run on GitHub is the real test, and a red entry for 3.8 is information, not a defect of the
+  workflow. The README (table and list) now says the CI tries both.
+- **Tests:** `tests/test_old_python_support.py` (15 tests, one skipped on a Python that has the real `assertNoLogs`): the legacy literal loads with a
+  `literal_eval` that imitates the one of 3.9 (the failing case of the CI run, a list of wrapped items, text with leading spaces or tabs, and text that must still be
+  refused); the stand-in for `assertNoLogs` (passes, fails with the message, ignores lower levels, accepts a number and a logger object, leaves the logger as it was);
+  the helper that removes the version warning, tested against the text that `check_python_version` really prints. `tests/test_repo_files.py` checks the new job (3.8 and 3.9,
+  fail-fast off, `ubuntu-24.04`, the only one that may fail). The whole suite also passes with `assertNoLogs` removed from `unittest` (imitating 3.8 and 3.9). 14 mutations of
+  these changes were all caught (one only with `assertNoLogs` removed, because this Python has the real one).
+
 ## 0.5.79 - 17.11.2026 - The actions of the release workflow are pinned to commit hashes
 
 - **`build.yml`: every `uses:` line names a full commit hash with the version in a comment**, so that a moved or hijacked tag cannot change what builds, attests

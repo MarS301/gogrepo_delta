@@ -6,7 +6,7 @@ Run from the folder that contains `gogrepo_delta.py`:
     python -m unittest discover -s tests -p "test_[a-ce-z]*.py"   # fast tests only (< 1 second)
 
 No network or GOG account is needed, and the results do not depend on the operating system: the download rig fakes the platform (Linux, Windows or macOS) and `os.posix_fallocate` itself, so the same tests run on Windows, macOS and Linux. `requests` is required (like the script itself); if `html5lib` or
-`psutil` are missing, empty stand-ins are used so the tests can still run. The tests do not need the optional packages either (`cryptography`, `blake3`, `html2text`, PyObjC): the tests that need one of them are skipped without it, and the CI has a job that runs the whole suite with the required packages only (`python -m pip install -r requirements.txt pytest`) and a job that runs it on Python 3.9, which is allowed to fail (best effort).
+`psutil` are missing, empty stand-ins are used so the tests can still run. The tests do not need the optional packages either (`cryptography`, `blake3`, `html2text`, PyObjC): the tests that need one of them are skipped without it, and the CI has a job that runs the whole suite with the required packages only (`python -m pip install -r requirements.txt pytest`) and a job that runs it on Python 3.8 and 3.9, which is allowed to fail (best effort).
 
 The tests run inside a scratch folder that is removed afterwards (`_bootstrap.py`), so it is safe to start them from any folder, also one that holds a real library and its `gog-manifest.dat`.
 

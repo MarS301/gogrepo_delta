@@ -102,7 +102,7 @@ class ConsoleTests(unittest.TestCase):
         for encoding in ('cp1252', 'ascii', 'latin-1'):
             result = self.run_child(encoding)
             self.assertEqual(result.returncode, 0, (encoding, result.stderr[-300:]))
-            self.assertEqual(result.stderr, b'', encoding)             # no "Logging error" traceback
+            self.assertEqual(_bootstrap.without_old_python_warning(result.stderr), b'', encoding)     # no "Logging error" traceback
             out = result.stdout.decode(encoding)
             self.assertIn('before', out)
             self.assertIn('after', out)                                 # the lines around the Chinese one are not lost
@@ -114,7 +114,7 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         out = result.stdout.decode('utf-8')
         self.assertIn('title: \u4e2d\u6587 \u65e5\u672c\u8a9e \u0412\u0435\u0434\u044c\u043c\u0430\u043a', out)
-        self.assertEqual(result.stderr, b'')
+        self.assertEqual(_bootstrap.without_old_python_warning(result.stderr), b'')
 
     def test_characters_the_code_page_can_show_are_not_escaped(self):
         result = self.run_child('cp1252')

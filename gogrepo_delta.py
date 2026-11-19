@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.79'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.80'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -1227,7 +1227,9 @@ def _load_legacy_literal(text):
                             remove.update((i, i + 1, i + 2, j + 1))
                         break
     literal_text = tokenize.untokenize([token for i, token in enumerate(tokens) if i not in remove])
-    return _attrdict_tree(ast.literal_eval(literal_text))
+    # Python 3.10 and newer ignore spaces and tabs before the expression; 3.8 and 3.9 raise IndentationError for them, and the removed
+    # `AttrDict(**` leaves exactly such spaces.
+    return _attrdict_tree(ast.literal_eval(literal_text.strip()))
 
 
 def parse_manifest_text(ad, filepath, save_repair=True):
