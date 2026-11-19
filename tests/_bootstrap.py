@@ -37,6 +37,47 @@ if 'gogrepo_delta' not in sys.modules:
 gogrepoc = sys.modules['gogrepo_delta']   # the name gogrepoc is kept in the tests as a short alias
 
 
+def _assert_no_logs(self, logger=None, level=None):
+    """unittest.TestCase.assertNoLogs (Python 3.10 and newer) for older Pythons: a context manager that fails the test if the logger logs
+    anything at `level` or above while it is active. Used as TestCase.assertNoLogs when the running Python does not have it."""
+    import contextlib
+    import logging
+
+    @contextlib.contextmanager
+    def watching():
+        target = logging.getLogger(logger) if (logger is None or isinstance(logger, str)) else logger
+        threshold = logging.getLevelName(level) if isinstance(level, str) else (level or logging.INFO)
+        records = []
+
+        class Collect(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+        handler = Collect(threshold)
+        old_level, old_propagate = target.level, target.propagate
+        target.addHandler(handler)
+        target.setLevel(min(threshold, old_level) if old_level else threshold)
+        target.propagate = False
+        try:
+            yield
+        finally:
+            target.removeHandler(handler)
+            target.setLevel(old_level)
+            target.propagate = old_propagate
+        if records:
+            self.fail('Unexpected logs found: %r' % ['%s:%s' % (r.levelname, r.getMessage()) for r in records])
+    return watching()
+
+
+import unittest as _unittest
+if not hasattr(_unittest.TestCase, 'assertNoLogs'):
+    _unittest.TestCase.assertNoLogs = _assert_no_logs
+
+
+def without_old_python_warning(stderr):
+    """stderr (bytes) of a run of the program without the one line that it prints on a Python older than 3.10 (README: best effort)."""
+    return b''.join(line for line in stderr.splitlines(True) if not line.startswith(b'Warning: Python '))
+
+
 def has_cryptography():
     """True if the optional `cryptography` package is installed (the tests of the password-encrypted token need it and are skipped without)."""
     try:

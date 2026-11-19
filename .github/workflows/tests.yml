@@ -90,13 +90,21 @@ jobs:
       - name: Run tests
         run: python -m pytest -q tests
 
-  # Python 3.9 is "best effort" (README): the program starts with a warning there. This is the only job that is allowed to fail: a red job
-  # tells the maintainer that something no longer works on 3.9, and it does not fail the run.
-  python-3-9:
-    name: Best effort / Python 3.9 (may fail)
+  # Python 3.8 and 3.9 are "best effort" (README): the program starts with a warning there. This is the only job that is allowed to fail: a red
+  # entry tells the maintainer that something no longer works on that version, and it does not fail the run.
+  best-effort:
+    name: Best effort / Python ${{ matrix.python-version }} (may fail)
+    # Not ubuntu-latest: that image could not provide Python 3.9 (first run, 18.11.2026). Python 3.8 and 3.9 are still offered for ubuntu-24.04.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     continue-on-error: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.8"
+          - "3.9"
 
     steps:
       - name: Check out repository
@@ -105,7 +113,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.9"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements*.txt
 

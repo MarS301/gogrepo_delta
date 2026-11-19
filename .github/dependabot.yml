@@ -1,0 +1,12 @@
+# Dependabot opens a pull request when a newer version of a GitHub Action used in .github/workflows exists (the tests of the pull request
+# run as for any other change). https://docs.github.com/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # Do not propose a release before it is 14 days old: a release that turns out to be bad (or hijacked) is usually found and withdrawn
+    # within days.
+    cooldown:
+      default-days: 14
