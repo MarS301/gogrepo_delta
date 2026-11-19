@@ -2,3 +2,4 @@
 -r requirements.txt
 -r requirements-optional.txt
 pytest
+pyyaml                                          # the tests of the workflow files read them as YAML (skipped without)

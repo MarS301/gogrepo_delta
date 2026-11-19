@@ -18,6 +18,28 @@ def read(*parts):
         return r.read()
 
 
+def job_block(workflow_text, name):
+    """The text of one job of a workflow: from `  name:` (two spaces) to the next job or the end."""
+    match = re.search(r'^  %s:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)' % re.escape(name), workflow_text, re.M | re.S)
+    assert match, 'no job %s' % name
+    return match.group(1)
+
+
+USES = re.compile(r'^\s*(?:-\s*)?uses:\s*(?P<action>[\w.-]+/[\w./-]+)@(?P<ref>\S+)(?:\s+#\s*(?P<comment>\S+))?\s*$', re.M)
+FULL_HASH = re.compile(r'[0-9a-f]{40}')
+
+
+def action_uses(workflow_text):
+    """[(action, ref, comment)] for every `uses:` of a workflow: `uses: actions/checkout@v6` or `uses: actions/checkout@<hash> # v6.1.0`."""
+    return [(m.group('action'), m.group('ref'), m.group('comment')) for m in USES.finditer(workflow_text)]
+
+
+def major_version(ref, comment):
+    """'v6' for the tag v6 and for a hash with the comment # v6.1.0."""
+    version = comment if FULL_HASH.fullmatch(ref) else ref
+    return re.match(r'v\d+', version).group(0) if version and re.match(r'v\d+', version) else None
+
+
 def package_names(text):
     """The names of the packages in a requirements file (without versions, markers and comments), in lower case."""
     names = []
@@ -48,19 +70,39 @@ class WorkflowTests(unittest.TestCase):
                 data = yaml.safe_load(text)
                 self.assertTrue(data.get('jobs'))
 
-    def test_the_workflows_use_the_same_version_of_each_action(self):
+    def test_the_workflows_use_the_same_major_version_of_each_action(self):
+        # tests.yml names a tag (v6), build.yml a hash with the version in a comment (# v6.1.0): both are version 6
         for action in ('actions/checkout', 'actions/setup-python'):
             versions = {}
             for name, text in self.files.items():
-                for version in re.findall(r'uses:\s*%s@(\S+)' % re.escape(action), text):
-                    versions.setdefault(version, set()).add(name)
+                for used, ref, comment in action_uses(text):
+                    if used == action:
+                        versions.setdefault(major_version(ref, comment), set()).add(name)
             with self.subTest(action=action):
-                self.assertEqual(1, len(versions), 'different versions of %s: %s' % (action, versions))
+                self.assertEqual(1, len(versions), 'different major versions of %s: %s' % (action, versions))
+                self.assertNotIn(None, versions)
+
+    def test_every_action_of_the_release_workflow_is_pinned_to_a_commit_with_its_version_in_a_comment(self):
+        uses = action_uses(self.build_yml)
+        self.assertEqual(self.build_yml.count('uses:'), len(uses), 'a uses: line that this test cannot read')
+        self.assertGreaterEqual(len(uses), 4)
+        for action, ref, comment in uses:
+            with self.subTest(action=action):
+                self.assertRegex(ref, r'^[0-9a-f]{40}$', '%s is not pinned to a full commit hash' % action)
+                self.assertRegex(comment or '', r'^v\d+\.\d+\.\d+$', 'the hash of %s needs a comment with its version (# v1.2.3)' % action)
+
+    def test_the_same_action_has_the_same_hash_and_version_everywhere_in_the_release_workflow(self):
+        seen = {}
+        for action, ref, comment in action_uses(self.build_yml):
+            seen.setdefault(action, set()).add((ref, comment))
+        for action, versions in seen.items():
+            with self.subTest(action=action):
+                self.assertEqual(1, len(versions), '%s: %s' % (action, versions))
 
     def test_the_test_matrix_has_the_oldest_supported_python_and_the_one_of_the_binaries(self):
         readme = read('README.md')
         oldest = re.search(r'Python \*\*(\d+\.\d+) or newer\*\*', readme).group(1)
-        test_job = self.tests_yml.split('\n  required-packages-only:', 1)[0]            # the matrix of the main job, not the job with fewer packages
+        test_job = job_block(self.tests_yml, 'test')                                  # the matrix of the main job, not of the other jobs
         matrix = set(re.findall(r'^\s*(?:-\s*)?python-version:\s*"(\d+\.\d+)"|^\s*-\s*"(\d+\.\d+)"', test_job, re.M))
         versions = {a or b for a, b in matrix}
         self.assertIn(oldest, versions, 'the README says Python %s or newer, but the tests do not run on it' % oldest)
@@ -78,12 +120,30 @@ class WorkflowTests(unittest.TestCase):
     def test_jobs_have_a_time_limit(self):
         self.assertEqual(self.tests_yml.count('runs-on:'), self.tests_yml.count('timeout-minutes:'))
 
+    def test_python_3_9_has_a_job_that_is_allowed_to_fail_and_it_is_the_only_one(self):
+        job = job_block(self.tests_yml, 'python-3-9')
+        self.assertRegex(job, r'python-version: "3\.9"')
+        self.assertRegex(job, r'(?m)^    continue-on-error: true$')
+        self.assertIn('timeout-minutes:', job)
+        self.assertEqual(1, self.tests_yml.count('continue-on-error'), 'only the job for the best effort version may fail without failing the run')
+        for other in ('test', 'required-packages-only'):
+            self.assertNotIn('continue-on-error', job_block(self.tests_yml, other))
+        main_versions = re.findall(r'"(\d+\.\d+)"', job_block(self.tests_yml, 'test'))
+        self.assertNotIn('3.9', main_versions)
+
+    def test_the_readme_calls_python_3_9_best_effort(self):
+        lines = [l for l in read('README.md').splitlines() if '3.8' in l and '3.9' in l]
+        self.assertEqual(2, len(lines), 'the table and the list of requirements both say what is true of Python 3.8 and 3.9')
+        for line in lines:
+            self.assertIn('best effort', line)
+            self.assertIn('allowed to fail', line)
+
     def test_the_test_workflow_installs_from_the_requirements_files(self):
         self.assertIn('-r requirements-dev.txt', self.tests_yml)
         self.assertNotRegex(self.tests_yml, r'pip install (?!-r|--upgrade)\w')   # no package list that could drift
 
     def test_one_job_has_only_the_required_packages(self):
-        job = self.tests_yml.split('\n  required-packages-only:', 1)[1]
+        job = job_block(self.tests_yml, 'required-packages-only')
         self.assertIn('-r requirements.txt', job)
         self.assertNotIn('requirements-optional', job)
         self.assertNotIn('requirements-dev', job)
@@ -97,6 +157,38 @@ class WorkflowTests(unittest.TestCase):
         installed -= {'pyinstaller'}                    # only the build needs it
         listed = set(package_names(read('requirements.txt')) + package_names(read('requirements-optional.txt')))
         self.assertEqual(listed, installed, 'build.yml installs %s, the requirements files list %s' % (sorted(installed), sorted(listed)))
+
+
+@unittest.skipUnless(os.path.isfile(os.path.join(ROOT, '.github', 'dependabot.yml')), 'no .github/dependabot.yml next to the tests')
+class DependabotTests(unittest.TestCase):
+    def setUp(self):
+        self.text = read('.github', 'dependabot.yml')
+
+    def test_it_is_valid_yaml_of_version_2(self):
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest('PyYAML is not installed')
+        data = yaml.safe_load(self.text)
+        self.assertEqual(2, data['version'])
+        self.assertEqual(1, len(data['updates']))
+
+    def test_it_checks_the_github_actions_of_the_workflows_once_a_month(self):
+        self.assertRegex(self.text, r'(?m)^  - package-ecosystem: github-actions$')
+        self.assertRegex(self.text, r'(?m)^    directory: /$')            # /  means .github/workflows
+        self.assertRegex(self.text, r'(?m)^      interval: monthly$')
+
+    def test_it_waits_14_days_after_a_release(self):
+        self.assertRegex(self.text, r'(?m)^    cooldown:\n      default-days: 14$')
+
+    def test_the_yaml_values_are_those_of_the_text_checks(self):
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest('PyYAML is not installed')
+        update = yaml.safe_load(self.text)['updates'][0]
+        self.assertEqual(('github-actions', '/', 'monthly', 14),
+                         (update['package-ecosystem'], update['directory'], update['schedule']['interval'], update['cooldown']['default-days']))
 
 
 class PackageListTests(unittest.TestCase):

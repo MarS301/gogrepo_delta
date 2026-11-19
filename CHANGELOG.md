@@ -31,6 +31,51 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.79 - 17.11.2026 - The actions of the release workflow are pinned to commit hashes
+
+- **`build.yml`: every `uses:` line names a full commit hash with the version in a comment**, so that a moved or hijacked tag cannot change what builds, attests
+  and uploads the release binaries (the workflow has `contents`, `id-token` and `attestations` write permissions). Nothing else in the file changed (only
+  these four lines). `tests.yml` stays on version tags, as decided. The hashes were checked by the maintainer with `git ls-remote` on 17.11.2026, and each
+  floating tag the workflow used was the newest release of its major version, so the pins run what the tags ran:
+
+  | Action | Was | Now | Hash (a tag without `^{}` points at the commit itself) |
+  |---|---|---|---|
+  | `actions/checkout` (2 uses) | `@v6` | `v6.1.0` | `d23441a48e516b6c34aea4fa41551a30e30af803` |
+  | `actions/setup-python` | `@v6` | `v6.3.0` | `ece7cb06caefa5fff74198d8649806c4678c61a1` |
+  | `actions/attest` | `@v4` | `v4.2.2` | `1e69f48acb82d1966a394da916b4c1698aa569d6` |
+
+  For comparison, `actions/checkout` v6.0.3 is `df4cb1c069e1874edd31b4311f1884172cec0e10` (the `^{}` line of an annotated tag). `actions/checkout` v7.0.0 and v7.0.1
+  exist; `dependabot.yml` (0.5.78) will propose them after the 14 days of cooldown. A pinned action no longer receives fixes by itself: that is what the monthly
+  Dependabot pull requests are for. When one arrives, read what changed in the action (for `build.yml` the tests do not run it), then merge.
+- **To update a pin by hand:** `git ls-remote https://github.com/actions/<name> 'refs/tags/<major>*'`, take the hash of the version you want (the `^{}` line if
+  there is one), and change the hash and the comment of every `uses:` line of that action in `build.yml`.
+- **Tests (`tests/test_repo_files.py`, 25):** every `uses:` line of `build.yml` has a 40-character lowercase hash and a comment `# vX.Y.Z`; no `uses:` line the test cannot
+  read (a local action or a Docker reference would fail it, so a decision is needed first); the same action has the same hash and version everywhere in the file;
+  and `build.yml` (hash plus comment) and `tests.yml` (tag) use the same major version of `actions/checkout` and `actions/setup-python`. The tests check the form
+  and not the hashes themselves, so that a Dependabot pull request that changes them is not failed by the tests. Eight mutations (a tag, a short or uppercase hash,
+  a missing comment, a comment without patch version, two different checkout hashes, a different major version, a `uses:` the test cannot read) were all caught.
+- Nothing in this entry could be tried outside GitHub: the first published release shows whether the workflow resolves all four pinned actions.
+
+## 0.5.78 - 17.11.2026 - CI: a best-effort job for Python 3.9, Dependabot for the GitHub Actions
+
+- **New CI job `Best effort / Python 3.9 (may fail)`** in `tests.yml`: the whole suite on Python 3.9 with all packages. It is the only job with
+  `continue-on-error: true`, so a failure there is visible (a red job) without failing the run. This is the "best effort" the README promises for 3.9;
+  Python 3.8 is still not tested. It could not be tried in the sandbox this was made in (no Python 3.9 there): the first run on GitHub shows whether
+  the suite passes on 3.9, and a red job is information, not a defect of the workflow. The README (table and list of requirements) says so.
+- **`.github/dependabot.yml`:** Dependabot checks the GitHub Actions used in `.github/workflows` **once a month** and proposes a release only when it is
+  **at least 14 days old** (`cooldown: default-days: 14`), so that a bad or hijacked release is usually found before it reaches you. Every pull request runs
+  the tests; the release workflow (`build.yml`) only runs when a release is published, so read what changed in an action it uses. GitHub reports a mistake
+  in the file under Insights > Dependency graph > Dependabot.
+- `requirements-dev.txt` also lists `pyyaml` (the tests of the workflow files and of `dependabot.yml` read them as YAML; without it those tests skip).
+- **Pinning the actions of `build.yml` to commit hashes** was decided here and done in 0.5.79 (it waited for hashes that the maintainer checked). Hashes found on the web for
+  `actions/setup-python` and `actions/attest` came only from third-party pull requests and are not used. Verified so far, by the maintainer with
+  `git ls-remote`: `actions/checkout` v6.0.3 is `df4cb1c069e1874edd31b4311f1884172cec0e10` (the `^{}` line of the annotated tag) and v6.1.0 is
+  `d23441a48e516b6c34aea4fa41551a30e30af803` (a tag without `^{}` points at the commit itself). `actions/checkout` v7.0.0 and v7.0.1 exist as well; the
+  workflows stay on v6 until Dependabot proposes the move and the maintainer accepts it.
+- Tests: `tests/test_repo_files.py` has 6 more tests (23): the job for Python 3.9 exists, has a time limit and is the only one allowed to fail, 3.9 is not in the
+  main matrix, the README calls 3.9 best effort in both places, and `dependabot.yml` is valid YAML of version 2 and says github-actions, `/`, monthly,
+  cooldown 14. 11 mutations of these files were all caught (one only after the README test looked at both places).
+
 ## 0.5.77 - 17.11.2026 - CI and packaging: more Python versions, a required-packages-only job, requirements files, .gitattributes, .editorconfig
 
 - **The tests now run on Python 3.10, 3.11, 3.12, 3.13 and 3.14** (the README says 3.10 or newer; the release binaries are built with 3.14). Python 3.10 and 3.14
