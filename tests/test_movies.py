@@ -455,13 +455,48 @@ class ColumnTests(Base):
         game = [l for l in lines if 'game_000' in l][0]
         self.assertIn(' game ', game)
 
-    def list_output(self):
+    def list_output(self, os_list=(), skipos_list=(), lang_list=(), skiplang_list=()):
         import io
         import contextlib
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
-            g.cmd_list([], [], [], [], [])
+            g.cmd_list([], list(os_list), list(skipos_list), list(lang_list), list(skiplang_list))
         return buffer.getvalue(), '\n'.join(r.getMessage() for r in logs.records)
+
+    def test_list_with_an_os_filter_still_shows_the_movies(self):
+        # the config file's os = ... reaches `list` as -os; the files of a movie have the os 'video' and belong to every system
+        with self.gog():
+            self.update()
+        for os_list in (['windows'], ['linux'], ['windows', 'linux', 'mac']):
+            with self.subTest(os_list=os_list):
+                out, log = self.list_output(os_list=os_list, lang_list=['en'])
+                self.assertIn(DELIVERANCE_SLUG, out)
+                self.assertIn('vid', [l for l in out.splitlines() if DELIVERANCE_SLUG in l][0].split())
+        out, log = self.list_output(os_list=['linux'])
+        self.assertNotIn('game_000', out)                     # the game has only windows files: the filter still works for games
+        self.assertIn(DELIVERANCE_SLUG, out)
+
+    def test_list_movies_are_still_chosen_by_language_and_skipos(self):
+        with self.gog():
+            self.update()
+        out, log = self.list_output(os_list=['windows'], lang_list=['de'])
+        self.assertNotIn(DELIVERANCE_SLUG, out)               # -lang is not relaxed for movies (they have a language)
+        out, log = self.list_output(skipos_list=['windows'])
+        self.assertIn(DELIVERANCE_SLUG, out)
+        self.assertNotIn('game_000', out)
+
+    def test_an_invisible_character_does_not_shift_the_columns(self):
+        with self.gog():
+            self.update()
+        items = g.load_manifest()
+        for item in items:
+            if item.title == 'game_000':
+                item.long_title = 'Game 0\ufeff'
+        g.save_manifest(items)
+        out, log = self.list_output()
+        lines = out.splitlines()
+        columns = set(g._display_width(l[:l.index(' game ')] if ' game ' in l else l[:l.index(' movie ')]) for l in lines[1:])
+        self.assertEqual(len(columns), 1, out)
 
     def test_export_has_a_media_column_and_the_video_os(self):
         import csv

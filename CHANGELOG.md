@@ -31,6 +31,21 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.82 - 20.11.2026 - `list`: movies are shown with an -os filter, and an invisible character no longer shifts the columns
+
+- **DIFFERENCE: `list` shows movies when `-os` (or `os =` in the config file) is in use.** The files of a movie have the operating system `video`, so the filter
+  `-os windows` never matched them and a movie was left out as a game with no files for that system. `list` now uses `os_selected()` like `update`, `download`, `verify`
+  and `backup`: the files of a movie belong to every operating system. `-lang` and `-skipos` are unchanged (a movie still has a language, and `-skipos` only
+  leaves out the systems that are named). The `-os` help text of `list` was not changed.
+- **A column shift in `list` is fixed.** The width of a text on the screen (`_display_width`) counted every character as one column except combining accents and wide
+  Chinese, Japanese and Korean characters. Characters that take no room (byte-order mark U+FEFF, zero-width space and joiner, soft hyphen, variation selectors, control
+  characters) were counted as one, so the row was padded too little and every column after the name moved one place to the left. Found in a real manifest: the long
+  title of MouseCraft is `'MouseCraft\ufeff'`. The new helper `_char_width` counts them as zero (Unicode categories Mn, Me, Cf, Cc); `_fit` uses it too. The text
+  itself is not changed, in the manifest or on the screen.
+- **Tests:** `tests/test_ids.py` has one more (invisible characters in `_display_width`, `_pad` and `_fit`); `tests/test_movies.py` has 3 more (movies with `-os`,
+  `-lang` and `-skipos` still working as described, and a row with a byte-order mark stays aligned). 4 mutations of these changes were all caught (one only after
+  the test for `_fit` was tightened).
+
 ## 0.5.81 - 19.11.2026 - Unattended runs: a missing manifest stops the command, -usebackup; Python 3.8 failures fixed
 
 - **DIFFERENCE: `download`, `verify`, `import`, `backup`, `list`, `export` and `diagnostics` stop when there is no manifest.** Before, a missing manifest without a backup was
