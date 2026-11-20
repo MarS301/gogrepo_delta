@@ -162,12 +162,29 @@ class MainDispatchTests(TempDir):
         verify, status = self.run_verify('-tags', 'Favorites', '-ids', '3')
         self.assertEqual(verify.call_count, 0)
 
+    def test_list_gets_the_tag_options_itself(self):
+        # list reads the tags from the manifest by itself (it does not turn them into ids): main passes them on
+        for argv, expected in ((['-tags', 'Favorites', 'Next to play', '-skiptags', 'Completed'], (['Favorites', 'Next to play'], ['Completed'])), ([], ([], []))):
+            args = g.process_argv(['gogrepo_delta.py', 'list'] + argv)
+            with mock.patch.object(g, 'cmd_list') as listing:
+                g.main(args)
+            self.assertEqual(listing.call_count, 1)
+            self.assertEqual(tuple(listing.call_args[0][6:8]), expected)
+
+    def test_list_shows_the_tagged_games_of_a_manifest(self):
+        import io
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO'):
+            g.cmd_list([], [], [], [], [], 'ids', ['Favorites'], ['Completed'])
+        self.assertEqual(buffer.getvalue().split(), ['one'])
+
     def test_without_tag_options_nothing_changes(self):
         verify, status = self.run_verify()
         self.assertEqual((verify.call_args[0][8], verify.call_args[0][2]), ([], []))
 
     def test_every_command_that_takes_ids_takes_tags(self):
-        for command, extra in (('update', []), ('download', ['d']), ('verify', ['d']), ('import', ['s', 'd']), ('backup', ['s', 'd'])):
+        for command, extra in (('update', []), ('download', ['d']), ('verify', ['d']), ('import', ['s', 'd']), ('backup', ['s', 'd']), ('list', [])):
             a = g.process_argv(['gogrepo_delta.py', command] + extra + ['-tags', 'a', 'b c', '-skiptags', 'd'])
             self.assertEqual((a.tags, a.skiptags), (['a', 'b c'], ['d']), command)
             b = g.process_argv(['gogrepo_delta.py', command] + extra)

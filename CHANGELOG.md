@@ -31,6 +31,28 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.83 - 20.11.2026 - `list` takes `-tags` and `-skiptags`
+
+- **`list` can be limited by the tags of your GOG library.** `-tags TAG ...` lists only the items that have one of the tags (any of them), `-skiptags TAG ...` leaves
+  out the items that have one of them. The rules are those of `update`, `download`, `verify`, `import` and `backup` (`select_games_by_tags()` is reused): case,
+  accents and punctuation do not matter; a tag that no item has is an error that lists the tags that exist (and hints at a tag with spaces typed without quotes);
+  a manifest without tag data says to run `update` once; `-skiptags` wins over `-tags`. In `list` the tags are one more filter next to the words, `-os`, `-lang`
+  and `-format ids`: an item must pass all of them. A filter that leaves nothing says so (`no game matches the tag filter: ...`) and the run fails (exit code 1),
+  like the other filters of `list`. Nothing is listed and no tag filter is ever turned into "all games".
+- **This also selects movies.** The tags of movies are stored like those of games (`tag_names`), so after you tag your movies in your GOG library and run `update`
+  once, `list -tags Movies` shows only the movies. This was the way to list only the movies: `-os` cannot do it (the files of a movie belong to every operating
+  system), and `video`/`vid` is no operating system. Checked by the maintainer on a real manifest: movies are tagged there. A `-media game|movie` option for
+  `list`, `download`, `verify`, `backup` and `update` is a later idea.
+- **No tags column** in the table: an item can have several tags, so the lines would get long.
+- The line `N of M games` still counts the whole manifest as M.
+- `cmd_list` has two more parameters at the end (`tags=()`, `skiptags=()`); the README (`list`, tag section) and the help text describe the options. The config
+  file keys `tags` and `skiptags` now also apply to `list`, as they do to the other commands.
+- **Tests:** `tests/test_config.py` has 1 more (`tags` and `skiptags` from `[common]` and `[list]` reach `list`); `tests/test_movies.py` has 6 more (movies selected by tag, several tags and case, `-skiptags` wins, with `-os`, words and `-format ids`, an unknown tag, a
+  manifest without tag data, a filter that leaves nothing, and `list` without tag options unchanged); `tests/test_tags.py` has 2 more and `list` joined the test of
+  which commands accept the options. 9 mutations of this change were checked; the one that survived at first (the failure of an empty filter) got its own test.
+
+DIFFERENCE: only new options; `list` without `-tags` and `-skiptags` behaves as in 0.5.82. If your config file sets `tags =` or `skiptags =` for all commands, `list` now obeys it too.
+
 ## 0.5.82 - 20.11.2026 - `list`: movies are shown with an -os filter, and an invisible character no longer shifts the columns
 
 - **DIFFERENCE: `list` shows movies when `-os` (or `os =` in the config file) is in use.** The files of a movie have the operating system `video`, so the filter
