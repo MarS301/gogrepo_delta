@@ -320,6 +320,21 @@ class ScreenTextTests(unittest.TestCase):
         self.assertEqual(g._display_width('e\u0301'), 1)                              # letter with a combining accent
         self.assertEqual(g._display_width(''), 0)
 
+    def test_invisible_characters_take_no_room(self):
+        # found in a real manifest: the long title of MouseCraft ends in a byte-order mark, which pushed the columns of its row one to the left
+        for name, char in (('byte-order mark', '\ufeff'), ('zero-width space', '\u200b'), ('zero-width joiner', '\u200d'),
+                           ('soft hyphen', '\u00ad'), ('variation selector', '\ufe0f'), ('control character', '\x01')):
+            with self.subTest(name):
+                self.assertEqual(g._display_width('MouseCraft' + char), 10)
+                self.assertEqual(g._display_width(g._pad('MouseCraft' + char, 12)), 12)
+        self.assertEqual(g._fit('MouseCraft\ufeff', 10), 'MouseCraft\ufeff')          # not cut: it fits
+        self.assertTrue(g._fit('A very long name\ufeff', 10).endswith('...'))
+        self.assertLessEqual(g._display_width(g._fit('A very long name\ufeff', 10)), 10)
+        cut = g._fit('A\ufeff very long name', 12)                                   # an invisible character inside the part that is kept
+        self.assertEqual(cut, 'A\ufeff very lo...')
+        self.assertEqual(g._display_width(cut), 12)
+        self.assertEqual(g._display_width('\u304c'), 2)                             # wide characters are unchanged
+
     def test_cutting_to_a_width(self):
         self.assertEqual(g._fit('short', 10), 'short')
         self.assertEqual(g._fit('a very long game name', 10), 'a very ...')

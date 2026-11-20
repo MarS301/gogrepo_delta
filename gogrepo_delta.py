@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.81'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.82'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -3446,8 +3446,16 @@ def apply_tag_options(args):
 
 
 # --- the list command ---
+def _char_width(char):
+    """Columns a character takes on the screen: 0 for combining accents and for invisible characters (byte-order mark, zero-width space,
+    soft hyphen, variation selectors: the categories Mn, Me, Cf, Cc), 2 for wide Chinese, Japanese and Korean characters, else 1."""
+    if unicodedata.combining(char) or unicodedata.category(char) in ('Mn', 'Me', 'Cf', 'Cc'):
+        return 0
+    return 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+
+
 def _display_width(text):
-    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in text)
+    return sum(_char_width(c) for c in text)
 
 
 def _fit(text, width):
@@ -3456,9 +3464,9 @@ def _fit(text, width):
         return text
     kept, used = '', 0
     for char in text:
-        if used + _display_width(char) > width - 3:
+        if used + _char_width(char) > width - 3:
             break
-        kept, used = kept + char, used + _display_width(char)
+        kept, used = kept + char, used + _char_width(char)
     return kept + '...'
 
 
@@ -3479,7 +3487,7 @@ def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_forma
     filtered = bool(os_list or skipos_list or lang_list or skiplang_list)
 
     def passes(entry):
-        return ((not os_list or entry.os_type in os_list) and entry.os_type not in skipos_list
+        return ((not os_list or os_selected(entry, os_list)) and entry.os_type not in skipos_list       # a movie's files belong to every OS
                 and (not lang_list or entry.lang in wanted_langs) and entry.lang not in skipped_langs)
 
     files_of, candidates = {}, []
