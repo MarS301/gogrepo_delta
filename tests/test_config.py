@@ -791,6 +791,16 @@ class MergedOptionTests(ConfigTestCase):
             args = self.parse_command(command)
             self.assertEqual((args.skipos, args.skiplang), (['mac'], ['fr']), command)
 
+    def test_tags_and_skiptags_in_the_config_file_reach_list_too(self):
+        self.write('[common]\ntags = Movies, Next to play\nskiptags = Abandoned\n')
+        for command in self.COMMANDS_WITH_OS:
+            args = self.parse_command(command)
+            self.assertEqual((args.tags, args.skiptags), (['Movies', 'Next to play'], ['Abandoned']), command)
+        self.assertEqual(self.parse_command('list', '-tags', 'Favorites').tags, ['Favorites'])      # typed: beats the file, is not merged
+        self.write('[list]\ntags = Movies\n')
+        self.assertEqual(self.parse_command('list').tags, ['Movies'])
+        self.assertEqual(self.parse_command('download').tags, [])
+
     def test_the_example_download_os_and_update_os(self):
         self.write('[common]\nos = linux\n')
         self.assertEqual(self.parse_command('download').os, ['linux'])

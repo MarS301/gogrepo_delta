@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.82-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.83-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -48,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.82` |
+| **Current version** | `v0.5.83` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort: a CI job tries both and is allowed to fail) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -426,13 +426,15 @@ Options include `--ids ID ...`, `--skipids ID ...`, `--tags TAG ...`, `--skiptag
 python gogrepo_delta.py list
 python gogrepo_delta.py list witcher
 python gogrepo_delta.py list --format ids
+python gogrepo_delta.py list --tags Movies
 ```
 
 Search terms are matched against game IDs, titles, and names; all supplied words must match, in any order. Put search words before options. The `MEDIA` column says `game` or `movie`; the files of a movie are listed with the operating system `vid`.
 
 - `--format table`: readable table output (default).
 - `--format ids`: one game title/ID per line for use in scripts.
-- `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`: filter the listed games. By default `list` shows all systems and languages (it does not use the computer's defaults), but values from the config file apply.
+- `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`: filter the listed games. By default `list` shows all systems and languages (it does not use the computer's defaults), but values from the config file apply. The files of a movie belong to every operating system, so `--os` never hides a movie (`--lang` still applies).
+- `--tags TAG ...` / `--skiptags TAG ...`: list only the games (and movies) with one of the tags of your GOG library, or leave those out (see [Selecting games by tag](#selecting-games-by-tag)). Tag your movies on GOG, run `update` once, and `list --tags Movies` shows only the movies. The table has no tags column, because an item can have several tags.
 
 If nothing is found, `list` says why and exits with `1`: either no game matches the words (with suggestions), or games match but none has files for the chosen operating system / language (the message names the games and the filter in use, which may come from the config file).
 
@@ -545,7 +547,7 @@ Generates diagnostic information intended for maintenance and troubleshooting. `
 
 ## Selecting games by tag
 
-`--tags` and `--skiptags` use the tags you made in your GOG library (for example "Favorites" or "NEXT TO PLAY"). They work with `update`, `download`, `verify`, `import` and `backup`:
+`--tags` and `--skiptags` use the tags you made in your GOG library (for example "Favorites" or "NEXT TO PLAY"). They work with `update`, `download`, `verify`, `import`, `backup` and `list`:
 
 ```bash
 python gogrepo_delta.py update
@@ -557,6 +559,7 @@ python gogrepo_delta.py verify --tags "NEXT TO PLAY" Completed --skiptags Abando
 - A game matches if it has **any** of the tags given. Case, accents and punctuation do not matter. A tag with spaces must be in quotes.
 - `--tags` together with `--ids` means the games that are in both. `--skiptags` always wins.
 - A tag that no game has is an error (the message lists the tags that exist). If nothing is left to do, the command stops instead of running on all games.
+- In `list` the tags are one more filter, together with the words, `--os` and `--lang` (an item must pass all of them). `list` reads the manifest only: it needs no login and changes nothing.
 - `update --tags` limits what is fetched but keeps the usual rule of what counts (new and updated games; add `--full` for all of them). Like `--ids`, a tag-limited update never removes games from the manifest.
 
 ## Operating system and language selection

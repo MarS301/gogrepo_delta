@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.82'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.83'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -3478,9 +3478,24 @@ def _pad(text, width, right=False):
 LIST_OS_NAMES = {'windows': 'win', 'linux': 'lin', 'mac': 'mac', MOVIE_OS_TYPE: 'vid'}
 
 
-def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_format='table'):
-    """Shows the games in the manifest, or the ones that match the words. Needs no login and no network."""
-    items = load_manifest(require_existing=True)
+def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_format='table', tags=(), skiptags=()):
+    """Shows the games in the manifest, or the ones that match the words. Needs no login and no network. -tags and -skiptags (the tags of your
+    GOG library, kept in the manifest by update) work as in download, verify, import and backup; they also select movies, if the movies have tags."""
+    all_items = items = load_manifest(require_existing=True)
+    tags, skiptags = list(tags or []), list(skiptags or [])
+    if tags or skiptags:
+        selection = select_games_by_tags(all_items, tags, skiptags)
+        for what, why, message in selection.problems:
+            error(message)
+            run_report.fail(what, why)
+        if selection.fatal:
+            return
+        items = [game for game in all_items if (selection.selected is None or game.id in selection.selected) and game.id not in selection.skipped]
+        if not items:
+            if not selection.problems:          # an unknown tag was reported above
+                error('no game matches the tag filter: %s.' % '; '.join(part for part in ('-tags ' + ' '.join(tags) if tags else '', '-skiptags ' + ' '.join(skiptags) if skiptags else '') if part))
+                run_report.fail('list', 'no game matches the tags')
+            return
     wanted_langs = set(LANG_TABLE[lang] for lang in lang_list)
     skipped_langs = set(LANG_TABLE[lang] for lang in skiplang_list)
     code_of = dict((name, code) for code, name in LANG_TABLE.items())
@@ -3502,7 +3517,8 @@ def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_forma
     if not found:
         shown = ' '.join(words)
         filter_text = '; '.join(part for part in ('-os ' + ' '.join(os_list) if os_list else '', '-skipos ' + ' '.join(skipos_list) if skipos_list else '',
-                                                  '-lang ' + ' '.join(lang_list) if lang_list else '', '-skiplang ' + ' '.join(skiplang_list) if skiplang_list else '') if part)
+                                                  '-lang ' + ' '.join(lang_list) if lang_list else '', '-skiplang ' + ' '.join(skiplang_list) if skiplang_list else '',
+                                                  '-tags ' + ' '.join(tags) if tags else '', '-skiptags ' + ' '.join(skiptags) if skiptags else '') if part)
         filter_note = ' The filter in use is: %s (typed, or the defaults from the config file).' % filter_text if filter_text else ''
         if words:
             hidden = search_games(items, words) if filtered else []        # the games the words fit, before the filter took some out
@@ -3546,7 +3562,7 @@ def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_forma
         for row in [header] + rows:
             cells = [_pad(_fit(row[i], widths[i]), widths[i], right=i in (0, 6, 7)) for i in range(8)]
             print('  '.join(cells).rstrip())
-    info('%d of %d games' % (len(found), len(items)))
+    info('%d of %d games' % (len(found), len(all_items)))
 
 
 def build_parser():
@@ -3724,6 +3740,8 @@ def build_parser():
     g5 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g5.add_argument('-skiplang', action='store', help='leave out games that only have files for language(s)', nargs='*', default=[])
     g5.add_argument('-lang', action='store', help='only games that have files for language(s) (default: all)', nargs='*', default=[])
+    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); movies with the tag are listed too', nargs='*', default=[])
+    g1.add_argument('-skiptags', action='store', help='leave out the games with one of these tags of your GOG library', nargs='*', default=[])
     g1.add_argument('-format', action='store', choices=['table', 'ids'], default='table', help='table (default), or ids: only the title of each game, one per line, for scripts')
     add_common_flags(g1)
 
@@ -8387,7 +8405,7 @@ def main(args):
     elif args.command == 'clean':
         cmd_clean_stages(args.gamedir, args.orphans, args.partials, args.provisional, args.trash, args.installers, args.images, args.folders, args.relaxed, args.dryrun, args.all, args.yes)
     elif args.command == 'list':
-        cmd_list(args.words, args.os, args.skipos, args.lang, args.skiplang, args.format)
+        cmd_list(args.words, args.os, args.skipos, args.lang, args.skiplang, args.format, args.tags, args.skiptags)
     elif args.command == 'export':
         cmd_export(args.output, args.savedir, args.delimiter)
     elif args.command == 'wishlist':

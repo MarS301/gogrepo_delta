@@ -455,13 +455,113 @@ class ColumnTests(Base):
         game = [l for l in lines if 'game_000' in l][0]
         self.assertIn(' game ', game)
 
-    def list_output(self, os_list=(), skipos_list=(), lang_list=(), skiplang_list=()):
+    def list_output(self, os_list=(), skipos_list=(), lang_list=(), skiplang_list=(), tags=(), skiptags=(), words=(), output_format='table'):
         import io
         import contextlib
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
-            g.cmd_list([], list(os_list), list(skipos_list), list(lang_list), list(skiplang_list))
+            g.cmd_list(list(words), list(os_list), list(skipos_list), list(lang_list), list(skiplang_list), output_format, list(tags), list(skiptags))
         return buffer.getvalue(), '\n'.join(r.getMessage() for r in logs.records)
+
+    def tag_the_manifest(self, **tags_of):
+        """Gives tag names to items of the manifest (by title); the movie is 'deliverance...', the game 'game_000'. Items not named get []."""
+        items = g.load_manifest()
+        for item in items:
+            item.tag_names = list(tags_of.get(item.title, []))
+        g.save_manifest(items)
+        return items
+
+    def test_list_tags_show_only_the_movies_that_are_tagged_movies(self):
+        with self.gog():
+            self.update()
+        total = len(self.tag_the_manifest(**{DELIVERANCE_SLUG: ['Movies', 'Making of'], 'game_000': ['Favorites']}))
+        out, log = self.list_output(tags=['movies'])                       # case does not matter
+        self.assertIn(DELIVERANCE_SLUG, out)
+        self.assertNotIn('game_000', out)
+        self.assertEqual(len(out.splitlines()), 2)                         # the header and the movie: the other items have no tag
+        self.assertIn('1 of %d games' % total, log)                        # the total is the whole manifest
+        out, log = self.list_output(tags=['Making  of'])                   # an item with several tags is found by any of them
+        self.assertIn(DELIVERANCE_SLUG, out)
+        out, log = self.list_output(skiptags=['Movies'])
+        self.assertNotIn(DELIVERANCE_SLUG, out)
+        self.assertIn('game_000', out)
+        out, log = self.list_output(tags=['Movies', 'Favorites'])          # any of the tags
+        self.assertIn(DELIVERANCE_SLUG, out)
+        self.assertIn('game_000', out)
+        out, log = self.list_output(tags=['Movies', 'Favorites'], skiptags=['Favorites'])      # -skiptags wins
+        self.assertIn(DELIVERANCE_SLUG, out)
+        self.assertNotIn('game_000', out)
+        self.assertNotIn('Movies', out.splitlines()[0])                    # no tags column: an item can have several tags
+
+    def test_list_tags_work_with_the_other_filters_and_the_words(self):
+        with self.gog():
+            self.update()
+        self.tag_the_manifest(**{DELIVERANCE_SLUG: ['Movies'], 'game_000': ['Movies']})
+        out, log = self.list_output(tags=['Movies'], os_list=['linux'])    # the movie passes -os, the game has only windows files
+        self.assertIn(DELIVERANCE_SLUG, out)
+        self.assertNotIn('game_000', out)
+        out, log = self.list_output(tags=['Movies'], words=['game_000'])
+        self.assertIn('game_000', out)
+        self.assertNotIn(DELIVERANCE_SLUG, out)
+        out, log = self.list_output(tags=['Movies'], output_format='ids')
+        self.assertEqual(sorted(out.split()), sorted([DELIVERANCE_SLUG, 'game_000']))
+
+    def test_list_with_a_tag_that_no_item_has_says_so_and_fails(self):
+        with self.gog():
+            self.update()
+        self.tag_the_manifest(**{DELIVERANCE_SLUG: ['Movies']})
+        g.run_report.reset('list')
+        import io
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
+            g.cmd_list([], [], [], [], [], 'table', ['Nope'], [])
+        text = '\n'.join(r.getMessage() for r in logs.records)
+        self.assertEqual(buffer.getvalue(), '')                            # nothing is listed, never "all games"
+        self.assertIn("-tags 'Nope' matches no game", text)
+        self.assertIn('Movies', text)                                      # the message lists the tags that exist
+        self.assertNotEqual(g.run_report.exit_status(), 0)
+
+    def test_list_with_tags_that_leave_nothing_says_so_and_fails(self):
+        with self.gog():
+            self.update()
+        self.tag_the_manifest(**{DELIVERANCE_SLUG: ['Movies']})
+        g.run_report.reset('list')
+        import io
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
+            g.cmd_list([], [], [], [], [], 'table', ['Movies'], ['Movies'])
+        self.assertEqual(buffer.getvalue(), '')
+        self.assertIn('no game matches the tag filter: -tags Movies; -skiptags Movies.', '\n'.join(r.getMessage() for r in logs.records))
+        self.assertNotEqual(g.run_report.exit_status(), 0)
+
+    def test_list_with_tags_and_a_manifest_without_tag_data_says_to_run_update(self):
+        with self.gog():
+            self.update()
+        items = g.load_manifest()
+        for item in items:
+            if hasattr(item, 'tag_names'):
+                del item['tag_names']
+        g.save_manifest(items)
+        g.run_report.reset('list')
+        import io
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
+            g.cmd_list([], [], [], [], [], 'table', ['Movies'], [])
+        self.assertEqual(buffer.getvalue(), '')
+        self.assertIn("Run 'update' once", '\n'.join(r.getMessage() for r in logs.records))
+        self.assertNotEqual(g.run_report.exit_status(), 0)
+
+    def test_list_without_tag_options_is_unchanged(self):
+        with self.gog():
+            self.update()
+        total = len(self.tag_the_manifest(**{DELIVERANCE_SLUG: ['Movies']}))
+        out, log = self.list_output()
+        self.assertIn(DELIVERANCE_SLUG, out)
+        self.assertIn('game_000', out)
+        self.assertIn('%d of %d games' % (total, total), log)
 
     def test_list_with_an_os_filter_still_shows_the_movies(self):
         # the config file's os = ... reaches `list` as -os; the files of a movie have the os 'video' and belong to every system
