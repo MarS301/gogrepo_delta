@@ -2,8 +2,10 @@
 an expression were an IndentationError for ast.literal_eval before 3.10), and the tests do not need 3.10 only features (assertNoLogs) or an empty
 stderr on a Python that prints the 'older than recommended' warning. These tests run on every Python: the old behaviour is imitated where it differs."""
 import ast
+import glob
 import io
 import logging
+import os
 import unittest
 from unittest import mock
 
@@ -127,6 +129,118 @@ class OlderPythonWarningTests(unittest.TestCase):
     def test_a_current_python_prints_no_warning(self):
         self.assertEqual(b'', self.warning_of((3, 10, 0)))
 
+
+class NoNewerPythonFeaturesTests(unittest.TestCase):
+    """The README promises that Python 3.8 and 3.9 start (best effort). A static check of the program and the tests for what those versions
+    do not have: 81 tests failed on Python 3.8 because of one call of random.Random.randbytes (3.9), which no test on a newer Python noticed."""
+    ATTRIBUTES = {'randbytes': '3.9', 'removeprefix': '3.9', 'removesuffix': '3.9', 'bit_count': '3.10', 'lcm': '3.9', 'pairwise': '3.10',
+                  'unparse': '3.9', 'is_relative_to': '3.9', 'with_stem': '3.9', 'readlink': '3.9', 'to_thread': '3.9',
+                  'stdlib_module_names': '3.10', 'orig_argv': '3.10', 'file_digest': '3.11', 'add_note': '3.11'}
+    KEYWORDS = {'root_dir': '3.10', 'ignore_cleanup_errors': '3.10', 'onexc': '3.12', 'process_group': '3.11'}
+    MODULES = {'zoneinfo': '3.9', 'graphlib': '3.9', 'tomllib': '3.11'}
+    # each use that is guarded: by skipUnless(sys.version_info >= (3, 10)), by `if sys.version_info >= (3, 12)` (onerror is used before), by hasattr
+    ALLOWED = {('tests/test_repo_files.py', 'stdlib_module_names'), ('gogrepo_delta.py', 'onexc'), ('tests/test_old_python_support.py', 'randbytes')}
+
+    def files(self):
+        root = _bootstrap.ROOT
+        paths = [os.path.join(root, 'gogrepo_delta.py')] + sorted(glob.glob(os.path.join(root, 'tests', '**', '*.py'), recursive=True))
+        return [(os.path.relpath(p, root).replace(os.sep, '/'), p) for p in paths]
+
+    def problems(self, relative, source):
+        found = []
+        tree = ast.parse(source, feature_version=(3, 8))               # syntax that 3.8 does not know (match, ...) is a SyntaxError
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                version = self.ATTRIBUTES.get(node.attr)
+                if version and (relative, node.attr) not in self.ALLOWED:
+                    found.append('%s:%d .%s needs Python %s' % (relative, node.lineno, node.attr, version))
+                if node.attr == 'cache' and isinstance(node.value, ast.Name) and node.value.id == 'functools':
+                    found.append('%s:%d functools.cache needs Python 3.9' % (relative, node.lineno))
+            elif isinstance(node, ast.keyword) and node.arg in self.KEYWORDS and (relative, node.arg) not in self.ALLOWED:
+                found.append('%s:%d %s= needs Python %s' % (relative, node.value.lineno, node.arg, self.KEYWORDS[node.arg]))
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'zip' and any(k.arg == 'strict' for k in node.keywords):
+                found.append('%s:%d zip(strict=) needs Python 3.10' % (relative, node.lineno))
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or '']
+                for name in names:
+                    if name.split('.')[0] in self.MODULES:
+                        found.append('%s:%d import %s needs Python %s' % (relative, node.lineno, name, self.MODULES[name.split('.')[0]]))
+        return found
+
+    def test_the_program_and_the_tests_use_nothing_newer_than_python_3_8(self):
+        found = []
+        for relative, path in self.files():
+            with open(path, encoding='utf-8') as r:
+                found += self.problems(relative, r.read())
+        self.assertEqual([], found)
+
+    def test_the_check_finds_what_it_looks_for(self):
+        source = ('import random, zoneinfo\nimport functools\nx = random.Random(1).randbytes(4)\ny = "a".removeprefix("a")\n'
+                  'z = list(zip([1], [2], strict=True))\nimport glob\nglob.glob("*", root_dir=".")\n@functools.cache\ndef f(): pass\n')
+        found = self.problems('x.py', source)
+        for expected in ('randbytes', 'removeprefix', 'zip(strict=)', 'root_dir=', 'functools.cache', 'import zoneinfo'):
+            self.assertTrue(any(expected in line for line in found), (expected, found))
+
+    def test_the_check_ignores_comments_strings_and_the_allowed_use(self):
+        source = '# glob.glob(root_dir=...) and randbytes are named here\ntext = "x.randbytes(3)"\nok = [1].count(1)\n'
+        self.assertEqual([], self.problems('x.py', source))
+        self.assertEqual([], self.problems('tests/test_repo_files.py', 'import sys\nsys.stdlib_module_names\n'))
+        self.assertEqual(1, len(self.problems('tests/other.py', 'import sys\nsys.stdlib_module_names\n')))
+
+    def test_syntax_newer_than_python_3_8_is_found(self):
+        with self.assertRaises(SyntaxError):
+            self.problems('x.py', 'match 1:\n    case 1:\n        pass\n')
+
+
+class RigTests(unittest.TestCase):
+    def test_the_rig_blob_is_what_randbytes_returns(self):
+        import random
+        import sys
+        sys.path.insert(0, os.path.join(_bootstrap.ROOT, 'tests', 'download_rig'))
+        try:
+            import rig
+        finally:
+            sys.path.pop(0)
+        for seed in (0, 1, 'abc', 99999):
+            for size in (0, 1, 7, 4096, 1000003):
+                expected = random.Random(seed).randbytes(size) if hasattr(random.Random, 'randbytes') else None
+                actual = rig.blob(seed, size)
+                self.assertEqual(size, len(actual))
+                if expected is not None:
+                    self.assertEqual(expected, actual)
+        self.assertNotEqual(rig.blob(1, 64), rig.blob(2, 64))
+        self.assertEqual(rig.blob(5, 64), rig.blob(5, 64))
+
+    def test_the_rig_blob_of_size_zero_does_not_need_getrandbits_of_zero_bits(self):
+        # Random.getrandbits(0) raised ValueError on older Pythons
+        import random
+        import sys
+        sys.path.insert(0, os.path.join(_bootstrap.ROOT, 'tests', 'download_rig'))
+        try:
+            import rig
+        finally:
+            sys.path.pop(0)
+
+        class OldRandom(random.Random):
+            def getrandbits(self, k):
+                if k == 0:
+                    raise ValueError('number of bits must be greater than zero')
+                return super().getrandbits(k)
+        with mock.patch.object(rig.random, 'Random', OldRandom):
+            self.assertEqual(b'', rig.blob(3, 0))
+            self.assertEqual(8, len(rig.blob(3, 8)))
+
+    def test_a_scenario_that_fails_leaves_the_working_folder_as_it_was(self):
+        import sys
+        sys.path.insert(0, os.path.join(_bootstrap.ROOT, 'tests', 'download_rig'))
+        try:
+            import rig
+        finally:
+            sys.path.pop(0)
+        before = os.getcwd()
+        with self.assertRaises(KeyError):
+            rig.run(g, 'there_is_no_such_scenario')
+        self.assertEqual(before, os.getcwd())
 
 if __name__ == '__main__':
     unittest.main()

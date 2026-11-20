@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.80-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.81-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -48,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.80` |
+| **Current version** | `v0.5.81` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort: a CI job tries both and is allowed to fail) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -656,7 +656,9 @@ python gogrepo_delta.py update --manifestformat legacy
 
 JSON saves are checked by reading the data back. If it cannot be represented without changing its meaning, the old format is used for that save. Saves are atomic; the previous manifest is retained as `.bak`.
 
-If the manifest is missing or damaged and a backup exists, the program offers an interactive restore. A damaged manifest is preserved with a `.damaged` suffix. In non-interactive runs, it stops rather than asking an unanswered question or silently treating a damaged manifest as an empty library. A first run with neither manifest nor backup is normal.
+If the manifest is missing or damaged and a backup exists, the program offers an interactive restore. A damaged manifest is preserved with a `.damaged` suffix. In non-interactive runs, it stops rather than asking an unanswered question or silently treating a damaged manifest as an empty library. A first run with neither manifest nor backup is normal for `update`, the command that builds the manifest. Every command that needs one (`download`, `verify`, `import`, `backup`, `list`, `export`, `diagnostics`) stops with an error and exit status 1 when there is neither manifest nor backup, before it reads the token or asks for a password: most often the program was started in the wrong folder (the manifest is read from the current folder), and a scheduled task should not end with status 0 after doing nothing. `clean` has its own refusal.
+
+For runs that cannot be asked (scheduled tasks), `--usebackup` uses the backup copy of a missing or damaged manifest without asking, after checking that the backup can be read; a damaged manifest is kept as `.damaged`, and the summary of the run says `manifests restored from the backup copy`. Without it such a run stops, as above. Use it only if you accept continuing with the manifest as it was before the last save.
 
 **Back up `gog-token.json` securely** if you want to preserve the login session, and do not share it in bug reports.
 
@@ -688,7 +690,7 @@ A command can therefore complete most of its work and still return `1`. This is 
 - Check `gogrepo.log` for timestamped error messages.
 - If a manifest cannot be read, preserve the `.bak` and `.damaged` files before attempting manual recovery.
 - If login encounters a CAPTCHA or GOG changes its login page, try `login --browser`.
-- For scheduled tasks, remember that recovery prompts require an interactive terminal; unattended runs stop safely instead of waiting for input.
+- For scheduled tasks, remember that recovery prompts require an interactive terminal; unattended runs stop safely instead of waiting for input. Add `--usebackup` to let such a run use the backup copy of the manifest, and start the task in the folder that holds the manifest (a missing manifest stops it).
 
 ## Credits and links
 

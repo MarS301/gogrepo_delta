@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.80'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.81'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -1306,6 +1306,10 @@ def _stdin_is_interactive():
         return False
 
 
+# -usebackup: a missing or damaged manifest is replaced by its backup copy without asking, for runs that cannot ask (scheduled tasks)
+MANIFEST_USE_BACKUP = False
+
+
 def ask_yes_no(question):
     """Ask on the terminal; the default (just Enter) is no."""
     try:
@@ -1368,8 +1372,14 @@ def recover_manifest(filepath, problem):
         error("A backup copy exists: '%s'%s. It is the manifest as it was before the last save." % (backup, details))
     else:
         error("There is no backup copy ('%s') to fall back on." % backup)
+    if has_backup and MANIFEST_USE_BACKUP:
+        warn("-usebackup was given: using the backup copy '%s' without asking." % backup)
+        items = _restore_manifest_from_backup(filepath, backup)           # stops, changing nothing, if the backup is not usable either
+        run_report.count('manifests restored from the backup copy')
+        return items
     if not _stdin_is_interactive():
-        error("Not asking, because this run is not interactive (run it again in a terminal to be asked).")
+        error("Not asking, because this run is not interactive (run it again in a terminal to be asked, or add -usebackup to use the backup copy "
+              "without asking).")
         _manual_recovery_instructions(filepath, has_backup)
         raise SystemExit(1)
     if has_backup and ask_yes_no("Use the backup copy '%s' instead?" % backup):
@@ -1392,7 +1402,10 @@ def recover_manifest(filepath, problem):
     return []
 
 
-def load_manifest(filepath=MANIFEST_FILENAME):
+def load_manifest(filepath=MANIFEST_FILENAME, require_existing=False):
+    """The items of the manifest. With require_existing (download, verify, import, backup, list, export, diagnostics: commands that are useless
+    without a manifest) a manifest that does not exist, and has no backup, stops the program; without it that is the first run and the result is an
+    empty list (update, which builds the manifest; clean, which has its own refusal; wishlist, which only marks the games you own)."""
     info('loading local manifest...')
     try:
         with open(filepath, mode='r', encoding='utf-8') as r:
@@ -1400,6 +1413,13 @@ def load_manifest(filepath=MANIFEST_FILENAME):
     except FileNotFoundError:
         if os.path.exists(filepath + BACKUP_EXT):
             return recover_manifest(filepath, "was not found")
+        if require_existing:
+            # Not the first run: only `update` builds the manifest. Most often the program was started in the wrong folder (the manifest is read
+            # from the current folder), and without this a scheduled run would end with exit status 0 after doing nothing.
+            error("The manifest '%s' does not exist (the manifest is read from the current folder, '%s'), and there is no backup copy. '%s' needs "
+                  "it, so nothing was done. Run it from the folder that holds the manifest, or run 'update' first to make one."
+                  % (os.path.abspath(filepath), os.getcwd(), run_report.command or 'this command'))
+            raise SystemExit(1)
         return []                                           # no manifest and no backup: the first run
     except UnicodeDecodeError as e:
         return recover_manifest(filepath, "is damaged (%s)" % e)
@@ -3092,6 +3112,8 @@ def add_common_flags(parser):
     """Options shared by every sub-command."""
     parser.add_argument('-nolog', action='store_true', help="doesn't write log file gogrepo.log")
     parser.add_argument('-debug', action='store_true', help="Includes debug messages")
+    parser.add_argument('-usebackup', action='store_true',
+                        help="if the manifest is missing or damaged and a backup copy exists (gog-manifest.dat.bak), use the backup without asking. For scheduled runs, which cannot be asked and would otherwise stop")
     parser.add_argument('-manifestformat', choices=['json', 'legacy'], default='json',
                         help="file format used when the manifest is saved: json (default: fast, readable in any text editor) or legacy (the original format, for other gogrepo versions). Both formats can always be read.")
 
@@ -3398,7 +3420,7 @@ def apply_tag_options(args):
     tags, skiptags = list(args.tags or []), list(args.skiptags or [])
     if not tags and not skiptags:
         return True
-    items = load_manifest()
+    items = load_manifest(require_existing=True)
     selection = select_games_by_tags(items, tags, skiptags)
     for what, why, message in selection.problems:
         error(message)
@@ -3450,7 +3472,7 @@ LIST_OS_NAMES = {'windows': 'win', 'linux': 'lin', 'mac': 'mac', MOVIE_OS_TYPE: 
 
 def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_format='table'):
     """Shows the games in the manifest, or the ones that match the words. Needs no login and no network."""
-    items = load_manifest()
+    items = load_manifest(require_existing=True)
     wanted_langs = set(LANG_TABLE[lang] for lang in lang_list)
     skipped_langs = set(LANG_TABLE[lang] for lang in skiplang_list)
     code_of = dict((name, code) for code, name in LANG_TABLE.items())
@@ -3899,6 +3921,8 @@ CONFIG_NOTES = [
             ('debug', 'include debug messages'))),
     (None, (('manifestformat', 'format the manifest is saved in: json (fast, readable in a text editor) or legacy (the original '
                                'format, for other gogrepo versions); both can always be read'),)),
+    (None, (('usebackup', 'if the manifest is missing or damaged and its backup copy exists, use the backup without asking (for scheduled '
+                          'runs, which cannot be asked and would otherwise stop)'),)),
     (None, (('browser', 'sign in with a web browser instead of typing a user name and password here (use it when GOG shows a '
                         'captcha); you paste the address the browser ends up on'),)),
     (None, (('resumemode', 'how to handle resuming if necessary'),)),
@@ -5310,7 +5334,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs,save_diagnostic,lang_fallback=save_lang_fallback,tags=tags,skiptags=skiptags)
 
 def cmd_output_diagnostic_data(verbose):
-    gamesdb = load_manifest()
+    gamesdb = load_manifest(require_existing=True)
     output_diagnostic_data(gamesdb,verbose)
 
 def output_diagnostic_data(sorted_gamesdb,verbose=False):
@@ -5445,7 +5469,7 @@ def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipga
     else:
         stringOperation = "copy"
         stringOperationP = "copying"
-    gamesdb = load_manifest()
+    gamesdb = load_manifest(require_existing=True)
     selected_ids = resolve_ids_and_report(gamesdb, ids, '-ids') if ids else None       # the games that -ids means ...
     skipped_ids = resolve_ids_and_report(gamesdb, skipids, '-skipids') if skipids else set()   # ... and -skipids
 
@@ -6649,6 +6673,9 @@ def _remove_empty_subdirs(root_dir, skip_dir=None):
 
 
 def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,skipgalaxy,skipstandalone,skipshared, skipfiles,covers,backgrounds,skippreallocation,clean_old_images,downloadLimit = None, lang_fallback=None, use_blake3=True):
+    # The manifest first: a missing one stops the run here, before the token is read (it may ask for a password) or a session is made.
+    items = load_manifest(require_existing=True)
+    all_items = items
     downloadSession = None
     if not dryrun:
         downloadSession = makeGOGSession()
@@ -6659,8 +6686,6 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
         else:
             info('the blake3 package is not installed, so no BLAKE3 checksums are recorded for the downloads (python -m pip install blake3; -noblake3 hides this message)')
 
-    items = load_manifest()
-    all_items = items
 
     items = _select_download_items(items, ids, skipids, skipfiles)
 
@@ -6790,7 +6815,7 @@ def cmd_export(output='gog-library.csv', savedir=None, delimiter=None):
         error(file_write_message(output, problem))
         run_report.fail('csv', 'file cannot be written')
         return
-    items = load_manifest()
+    items = load_manifest(require_existing=True)
     delimiter = delimiter or default_csv_delimiter()
     columns = ['game id', 'title', 'media', 'folder', 'kind', 'file', 'operating system', 'language', 'version', 'size (bytes)', 'size', 'md5', 'update date', 'update time (UTC)']
     if savedir:
@@ -7136,7 +7161,7 @@ def cmd_wishlist(output=WISHLIST_FILENAME, csv_output=None, prices=False, countr
 
 
 def cmd_backup(src_dir, dest_dir,skipextras,os_list,lang_list,ids,skipids,skipgalaxy,skipstandalone,skipshared,lang_fallback=None):
-    gamesdb = load_manifest()
+    gamesdb = load_manifest(require_existing=True)
     selected_ids = resolve_ids_and_report(gamesdb, ids, '-ids') if ids else None       # the games that -ids means ...
     skipped_ids = resolve_ids_and_report(gamesdb, skipids, '-skipids') if skipids else set()   # ... and -skipids
 
@@ -7258,7 +7283,7 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
         else:
             info('the blake3 package is not installed, so no BLAKE3 checksums are recorded or compared (python -m pip install blake3; -noblake3 hides this message)')
 
-    items = load_manifest()
+    items = load_manifest(require_existing=True)
 
     save_manifest_needed = False;
 
@@ -8270,8 +8295,9 @@ def cmd_selfupdate(check=True):
 
 def main(args):
     """Run the command. Returns the exit status: 0, or 1 if something failed (see the summary at the end of the run)."""
-    global MANIFEST_FORMAT
+    global MANIFEST_FORMAT, MANIFEST_USE_BACKUP
     MANIFEST_FORMAT = getattr(args, 'manifestformat', MANIFEST_FORMAT)
+    MANIFEST_USE_BACKUP = bool(getattr(args, 'usebackup', False))
     run_report.reset(args.command)
     stime = datetime.datetime.now()
     if args.command == 'list':
