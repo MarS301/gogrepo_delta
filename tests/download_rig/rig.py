@@ -70,7 +70,9 @@ class Server:
     def base(self): return 'http://127.0.0.1:%d' % self.port
     def stop(self): self.httpd.shutdown(); self.httpd.server_close()
 
-def blob(seed, size): return random.Random(seed).randbytes(size)
+def blob(seed, size):
+    """`size` pseudo-random bytes for `seed`: the bytes of Random(seed).randbytes(size), which exists only from Python 3.9 (this is its definition)."""
+    return random.Random(seed).getrandbits(8 * size).to_bytes(size, 'little') if size else b''
 def md5hex(b): return hashlib.md5(b).hexdigest()
 
 def chunk_xml(name, data, chunk=1000, total=None, chunks=None, method='md5', corrupt_hash=False):
@@ -593,7 +595,15 @@ class FakeKernel32:
     def CloseHandle(self, h): self.log.append(('CloseHandle', h))
 
 def run(mod, name):
-    """Run one scenario against `mod`; return a normalised snapshot of everything observable."""
+    """Run one scenario against `mod`; return a normalised snapshot of everything observable. Whatever happens, the working folder is the
+    one it was before (a scenario that failed halfway used to leave the next tests in a folder that was about to be deleted)."""
+    cwd = os.getcwd()
+    try:
+        return _run(mod, name)
+    finally:
+        os.chdir(cwd)
+
+def _run(mod, name):
     import ctypes, ctypes.wintypes, platform
     from unittest import mock
     from types import SimpleNamespace

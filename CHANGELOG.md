@@ -31,6 +31,34 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.81 - 19.11.2026 - Unattended runs: a missing manifest stops the command, -usebackup; Python 3.8 failures fixed
+
+- **DIFFERENCE: `download`, `verify`, `import`, `backup`, `list`, `export` and `diagnostics` stop when there is no manifest.** Before, a missing manifest without a backup was
+  read as "the first run": an empty list, nothing to do, and exit status 0. In a scheduled task that starts in the wrong folder (the manifest is read from the current
+  folder) that looked like success. Now the command ends with exit status 1 and one message: `The manifest '/path/gog-manifest.dat' does not exist (the manifest is
+  read from the current folder, '/path'), and there is no backup copy. 'download' needs it, so nothing was done. Run it from the folder that holds the manifest, or run
+  'update' first to make one.` `update` (builds the manifest), `wishlist` (only marks the games you own) and `clean` (its own, more specific refusal) are unchanged. A
+  manifest that exists but lists no games is not "missing". The rule is the new argument `load_manifest(require_existing=True)` of those commands, not a global state
+  (a first version that used the current command name was refused for `update` by a test that had left another name behind).
+- **`download` reads the manifest before the token.** It used to make the GOG session first, so a scheduled `download` in the wrong folder first read the token (and with an
+  encrypted token asked for a password) before it found out that there was no manifest. A test runs all seven commands with the network and the token patched to fail.
+- **New option `-usebackup` (all commands, like `-manifestformat`; `--usebackup` in the README).** When the manifest is missing or damaged and `gog-manifest.dat.bak`
+  exists, the backup is used **without asking**: the backup is checked first (if it is not usable either the run stops and changes nothing), a damaged manifest is kept as
+  `.damaged`, a warning says `-usebackup was given`, and the summary counts `manifests restored from the backup copy`. This is for runs that cannot be asked; without the
+  option they stop as before, and the message now names the option. With no backup it changes nothing (a run that cannot ask still stops). The option is switched on and
+  off by every run (it does not stay on). **It can also be a default of the config file:** `usebackup = true` under `[common]` (the new config file has the line, explained,
+  set to `false`), so that a machine that only runs scheduled tasks needs no option on every command line.
+- **Python 3.8 (log of the best-effort job, 83 failed, 1328 passed): one cause.** The download test rig (`tests/download_rig/rig.py`) made its test files with
+  `random.Random(seed).randbytes(size)`, which exists only from Python 3.9: 81 tests failed with `AttributeError`, and two tests of `test_isolation` failed because the rig
+  had already changed the working folder when it crashed and did not change it back. The rig now builds the same bytes with `getrandbits(8 * size).to_bytes(size, 'little')`
+  (that is the definition of `randbytes`; every fixture and hash stays valid), and `rig.run` always restores the working folder. No failure of the log was in the program.
+- **A static check keeps it that way** (`NoNewerPythonFeaturesTests`): the program and every test file are read as a syntax tree and refused for features newer than 3.8
+  (`randbytes`, `removeprefix`, `functools.cache`, `zip(strict=)`, `glob(root_dir=)`, `zoneinfo`, `match`, ... ; the three guarded uses are listed with the reason). This
+  could not run on 3.8 itself in the sandbox (Python 3.12 only): the next run of the best-effort job on GitHub is the real test of 3.8 and 3.9.
+- **Tests:** `tests/test_unattended_manifest.py` (20 tests: the refusal for each command, `-usebackup` in every case that matters, the seven commands through `main` with the
+  network and the token patched to fail, the option on every sub-command and off by default, not sticky, README); `tests/test_old_python_support.py` has 7 more (22); `tests/test_config.py`
+  has one more (the config-file default). 23 mutations of these changes were all caught (two only after a test was tightened or added).
+
 ## 0.5.80 - 18.11.2026 - What the Python 3.9 job found: old-format manifests could not be read on Python 3.8 and 3.9
 
 - **Bug fixed (found by the first run of the best-effort job on Python 3.9): `_load_legacy_literal` raised `IndentationError` on Python 3.8 and 3.9.** It reads the

@@ -241,6 +241,14 @@ class SettingsReachTheProgramTests(ConfigTestCase):
         return subprocess.run([sys.executable, '-c', IMPORTER + code, SCRIPT_DIR], capture_output=True, text=True, timeout=60,
                               env=dict(os.environ, **{ENV: self.path}), cwd=self.dir, stdin=subprocess.DEVNULL)
 
+    def test_usebackup_can_be_switched_on_for_every_run_in_the_config_file(self):
+        code = "print(g.process_argv(['gogrepo_delta.py', 'list']).usebackup, g.process_argv(['gogrepo_delta.py', 'list', '-usebackup']).usebackup)"
+        for text, expected in (('[common]\nusebackup = true\n', 'True True'), ('[common]\nusebackup = false\n', 'False True'), ('', 'False True')):
+            with self.subTest(config=text):
+                result = self.run_python(code, text)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(expected, result.stdout.strip().splitlines()[-1])        # the line before it says which defaults came from the file
+
     def test_every_setting_is_used_by_its_constant(self):
         cfg = ('[settings]\nlog_max_mb = 7\nlog_backups = 2\nhttp_retry_count = 1\nhttp_retry_delay = 3\nhttp_timeout = 11\n'
                'http_no_retry_codes = 404, 410\ndownload_chunk_size = 2048\ndownload_threads = 3\nprogress_interval = 0.5\n'
