@@ -801,6 +801,17 @@ class MergedOptionTests(ConfigTestCase):
         self.assertEqual(self.parse_command('list').tags, ['Movies'])
         self.assertEqual(self.parse_command('download').tags, [])
 
+    def test_notags_in_the_config_file_reaches_the_commands_and_excludes_tags(self):
+        self.write('[common]\nnotags = yes\n')
+        for command in self.COMMANDS_WITH_OS:
+            self.assertTrue(self.parse_command(command).notags, command)
+        self.assertFalse(self.parse_command('download').tags)
+        self.assertEqual(self.parse_command('list', '-tags', 'Movies').tags, ['Movies'])     # typed -tags beats notags of the file ...
+        self.assertFalse(self.parse_command('list', '-tags', 'Movies').notags)               # ... which is dropped (they exclude each other)
+        self.write('[common]\ntags = Movies\n')
+        self.assertTrue(self.parse_command('list', '-notags').notags)                        # and the other way round
+        self.assertEqual(self.parse_command('list', '-notags').tags, [])
+
     def test_the_example_download_os_and_update_os(self):
         self.write('[common]\nos = linux\n')
         self.assertEqual(self.parse_command('download').os, ['linux'])

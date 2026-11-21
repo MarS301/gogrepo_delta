@@ -421,10 +421,44 @@ class UpdateTests(Base):
             resume[-1].pop(key, None)                                 # a resume file of a version without movies
         g.save_resume_manifest(resume)
         with self.gog() as fake:
-            self.update(movies=True, moviequality='all')
+            self.update(movies=False)
         self.assertNotIn('2', fake.library_types())
         self.assertEqual(fake.urls('/movieDetails/'), [])
         self.assertEqual(list(self.manifest()), ['game_000'])
+
+    def test_the_resume_pass_uses_the_saved_settings_and_then_the_request_runs_with_its_own(self):
+        # entry 0.5.85: before, the restart after the resume pass dropped -movies and -moviequality, so this request fetched no movies at all
+        with self.gog(interrupt_on=1000), self.assertRaises(KeyboardInterrupt):
+            self.update(movies=False)                                 # the interrupted run had no movies
+        resume = g.load_resume_manifest()
+        for key in ('movies', 'moviequality'):
+            resume[-1].pop(key, None)                                 # (a resume file of a version without movies: the pass has no movies either)
+        g.save_resume_manifest(resume)
+        with self.gog() as fake:
+            self.update(movies=True, moviequality='720p')
+        self.assertIn('/gameDetails/', fake.requests[0][0])           # the resume pass comes first and fetches no movie ...
+        self.assertEqual(fake.library_types(), ['1', '2'])            # ... the shelves are read by the restart of this request, movies included
+        self.assertEqual(self.files(self.manifest()[DELIVERANCE_SLUG]), ['en1patch1.bin', 'en1video2.bin'])      # with this request's -moviequality
+
+    def test_a_resumed_update_with_movies_keeps_the_movies_of_the_request(self):
+        with self.gog(interrupt_on=1000), self.assertRaises(KeyboardInterrupt):
+            self.update(movies=False)                                 # an interrupted run without movies (its resume file says movies: false)
+        self.assertEqual(g.load_resume_manifest()[-1]['movies'], False)
+        with self.gog() as fake:
+            self.update(movies=True, moviequality='720p')             # resumed by a request with movies
+        self.assertEqual(fake.library_types(), ['1', '2'])
+        self.assertEqual(self.files(self.manifest()[DELIVERANCE_SLUG]), ['en1patch1.bin', 'en1video2.bin'])
+        self.assertIn('the_art_of_playing', self.manifest())
+
+    def test_a_resumed_update_without_movies_leaves_the_movies_of_an_interrupted_run_alone(self):
+        with self.gog():
+            self.update(movies=True)                                  # the movies are in the manifest
+        with self.gog(interrupt_on=1000), self.assertRaises(KeyboardInterrupt):
+            self.update(movies=True, full=True)
+        with self.gog() as fake:
+            self.update(movies=False, full=True)                      # the resume pass finishes the interrupted run, the restart has no movies
+        self.assertEqual(fake.library_types(), ['1'])                 # only the shelf of the games: the restart of this request has no movies
+        self.assertIn(DELIVERANCE_SLUG, self.manifest())              # not looked at, so not removed
 
     def test_a_wrong_quality_stops_before_anything_is_fetched(self):
         with self.gog() as fake:
@@ -455,12 +489,12 @@ class ColumnTests(Base):
         game = [l for l in lines if 'game_000' in l][0]
         self.assertIn(' game ', game)
 
-    def list_output(self, os_list=(), skipos_list=(), lang_list=(), skiplang_list=(), tags=(), skiptags=(), words=(), output_format='table'):
+    def list_output(self, os_list=(), skipos_list=(), lang_list=(), skiplang_list=(), tags=(), skiptags=(), words=(), output_format='table', notags=False):
         import io
         import contextlib
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
-            g.cmd_list(list(words), list(os_list), list(skipos_list), list(lang_list), list(skiplang_list), output_format, list(tags), list(skiptags))
+            g.cmd_list(list(words), list(os_list), list(skipos_list), list(lang_list), list(skiplang_list), output_format, list(tags), list(skiptags), notags)
         return buffer.getvalue(), '\n'.join(r.getMessage() for r in logs.records)
 
     def tag_the_manifest(self, **tags_of):
@@ -520,6 +554,93 @@ class ColumnTests(Base):
         self.assertEqual(buffer.getvalue(), '')                            # nothing is listed, never "all games"
         self.assertIn("-tags 'Nope' matches no game", text)
         self.assertIn('Movies', text)                                      # the message lists the tags that exist
+        self.assertNotEqual(g.run_report.exit_status(), 0)
+
+    def add_games_without_installers(self):
+        """Two games like 'gwent_the_witcher_card_game' and 'hotline_miami_2_wrong_number_digital_comics' of a real manifest: extras only, and no file at all."""
+        items = g.load_manifest()
+        extras = [g.AttrDict(name='comic1.zip', size=100, lang='', os_type=None), g.AttrDict(name='comic2.zip', size=200, lang='', os_type=None)]
+        items.append(g.AttrDict(id=3001, title='extras_only', long_title='extras_only', media_type='1', downloads=[], galaxyDownloads=[], sharedDownloads=[],
+                                extras=extras, tag_names=[]))
+        items.append(g.AttrDict(id=3002, title='nothing_at_all', long_title='nothing_at_all', media_type='1', downloads=[], galaxyDownloads=[],
+                                sharedDownloads=[], extras=[], tag_names=[]))
+        g.save_manifest(items)
+
+    def test_list_filters_keep_the_games_that_have_no_installer_at_all(self):
+        # entry 0.5.85: -os/-lang decide about installers; a game with only extras (which belong to no system or language) or with nothing was hidden
+        with self.gog():
+            self.update()
+        self.add_games_without_installers()
+        for options in (dict(os_list=['windows']), dict(os_list=['linux']), dict(lang_list=['en']), dict(lang_list=['de']), dict(skipos_list=['windows']),
+                        dict(skiplang_list=['en']), dict(os_list=['linux'], lang_list=['de'])):
+            with self.subTest(**options):
+                out, log = self.list_output(**options)
+                rows = dict((line.split()[1], line.split()) for line in out.splitlines()[1:])
+                self.assertIn('extras_only', rows)
+                self.assertIn('nothing_at_all', rows)
+                self.assertEqual(rows['extras_only'][3:7], ['game', '-', '-', '2'])        # no system, no language, two extras
+                self.assertEqual(rows['nothing_at_all'][3:7], ['game', '-', '-', '0'])
+
+    def test_list_filters_still_hide_the_games_whose_installers_do_not_fit(self):
+        with self.gog():
+            self.update()
+        self.add_games_without_installers()
+        out, log = self.list_output(os_list=['linux'])                     # game_000 has windows installers only
+        self.assertNotIn('game_000', out)
+        self.assertIn(DELIVERANCE_SLUG, out)                               # the movie files belong to every system
+        out, log = self.list_output(os_list=['windows'])
+        self.assertIn('game_000', out)
+        out, log = self.list_output(lang_list=['de'])
+        self.assertNotIn('game_000', out)
+        out, log = self.list_output()                                      # no filter: everything, as before
+        for title in ('game_000', 'extras_only', 'nothing_at_all', DELIVERANCE_SLUG):
+            self.assertIn(title, out)
+
+    def test_list_filters_work_with_words_ids_and_tags_for_games_without_installers(self):
+        with self.gog():
+            self.update()
+        self.add_games_without_installers()
+        out, log = self.list_output(os_list=['linux'], words=['extras_only'], output_format='ids')
+        self.assertEqual(out.split(), ['extras_only'])
+        out, log = self.list_output(lang_list=['en'], notags=True, output_format='ids')       # the real GOG answer tags every movie 'MOVIE': these three have no tag
+        self.assertEqual(sorted(out.split()), sorted(['extras_only', 'nothing_at_all', 'game_000']))
+        g.run_report.reset('list')
+        import io
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
+            g.cmd_list(['game_000'], ['linux'], [], [], [], 'table', [], [], False)        # the words fit only a game whose installers do not
+        self.assertEqual(buffer.getvalue(), '')
+        self.assertIn("1 game matches 'game_000' (game_000) but none has files for the chosen operating system / language", '\n'.join(r.getMessage() for r in logs.records))
+        self.assertNotEqual(g.run_report.exit_status(), 0)
+
+    def test_list_notags_shows_the_movies_and_games_without_tags(self):
+        with self.gog():
+            self.update()
+        total = len(self.tag_the_manifest(**{'game_000': ['Favorites']}))
+        out, log = self.list_output(notags=True)
+        self.assertIn(DELIVERANCE_SLUG, out)                               # the movie has no tag
+        self.assertNotIn('game_000', out)
+        self.assertEqual(len(out.splitlines()), total)                     # the header and every item but the tagged game
+        self.assertIn('%d of %d games' % (total - 1, total), log)
+        out, log = self.list_output(notags=True, os_list=['linux'])        # the movie passes -os, the other items have windows files only
+        self.assertIn(DELIVERANCE_SLUG, out)
+        self.assertNotIn('game_000', out)
+        out, log = self.list_output(notags=True, skiptags=['Favorites'], words=[DELIVERANCE_SLUG], output_format='ids')
+        self.assertEqual(out.split(), [DELIVERANCE_SLUG])
+
+    def test_list_notags_with_nothing_left_says_so_and_fails(self):
+        with self.gog():
+            self.update()
+        self.tag_the_manifest(**dict((item.title, ['Movies']) for item in g.load_manifest()))     # everything has a tag
+        g.run_report.reset('list')
+        import io
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
+            g.cmd_list([], [], [], [], [], 'table', [], [], True)
+        self.assertEqual(buffer.getvalue(), '')
+        self.assertIn('no game matches the tag filter: -notags.', '\n'.join(r.getMessage() for r in logs.records))
         self.assertNotEqual(g.run_report.exit_status(), 0)
 
     def test_list_with_tags_that_leave_nothing_says_so_and_fails(self):

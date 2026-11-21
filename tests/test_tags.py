@@ -72,6 +72,22 @@ class SelectionTests(unittest.TestCase):
         selection = g.select_games_by_tags(manifest_games(), [], [])
         self.assertEqual((selection.selected, selection.skipped), (None, set()))
 
+    def test_notags_selects_the_games_without_any_tag(self):
+        selection = g.select_games_by_tags(manifest_games(), [], [], True)
+        self.assertEqual((selection.selected, selection.skipped, selection.problems, selection.fatal), ({4}, set(), [], False))
+        selection = g.select_games_by_tags(manifest_games(), [], ['Completed', 'Favorites'], True)       # -skiptags is allowed with it
+        self.assertEqual((selection.selected, selection.skipped), ({4}, {1, 2}))
+        self.assertEqual(g.select_games_by_tags(manifest_games()[:3], [], [], True).selected, set())     # every game has a tag: nothing is selected
+
+    def test_a_game_without_tag_data_is_not_tagless(self):
+        games = manifest_games() + [g.AttrDict(id=5, title='old entry')]          # never refreshed: its tags are unknown
+        self.assertEqual(g.select_games_by_tags(games, [], [], True).selected, {4})
+
+    def test_notags_with_a_manifest_without_tag_data_cannot_decide(self):
+        selection = g.select_games_by_tags([g.AttrDict(id=1, title='old')], [], [], True)
+        self.assertTrue(selection.fatal)
+        self.assertEqual(selection.problems[0][0], '-notags')
+
     def test_a_tag_that_no_game_has_is_a_problem_that_lists_the_tags(self):
         selection = g.select_games_by_tags(manifest_games(), ['Nope'], ['Also nope'])
         self.assertEqual([(what, why) for what, why, _ in selection.problems], [('-tags Nope', 'no such tag'), ('-skiptags Also nope', 'no such tag')])
@@ -93,8 +109,8 @@ class ApplyTagOptionsTests(TempDir):
         super().setUp()
         g.save_manifest(manifest_games())
 
-    def args(self, tags=(), skiptags=(), ids=(), skipids=()):
-        return SimpleNamespace(tags=list(tags), skiptags=list(skiptags), ids=list(ids), skipids=list(skipids))
+    def args(self, tags=(), skiptags=(), ids=(), skipids=(), notags=False):
+        return SimpleNamespace(tags=list(tags), skiptags=list(skiptags), ids=list(ids), skipids=list(skipids), notags=notags)
 
     def test_nothing_to_do_without_tag_options(self):
         a = self.args()
@@ -119,6 +135,33 @@ class ApplyTagOptionsTests(TempDir):
         b = self.args(skiptags=['Completed'])
         self.assertTrue(g.apply_tag_options(b))
         self.assertEqual((b.ids, b.skipids), ([], ['2']))
+
+    def test_notags_becomes_the_ids_of_the_games_without_tags(self):
+        a = self.args(notags=True)
+        self.assertTrue(g.apply_tag_options(a))
+        self.assertEqual((a.ids, a.skipids), (['4'], []))
+        b = self.args(notags=True, ids=['four', '1'])                       # with -ids: the games in both
+        self.assertTrue(g.apply_tag_options(b))
+        self.assertEqual(b.ids, ['4'])
+        c = self.args(notags=True, skiptags=['Completed'], skipids=['3'])
+        self.assertTrue(g.apply_tag_options(c))
+        self.assertEqual((c.ids, c.skipids), (['4'], ['3', '2']))
+
+    def test_notags_with_nothing_to_do_stops_instead_of_meaning_all_games(self):
+        for a in (self.args(notags=True, ids=['1']), self.args(notags=True, ids=['three'])):
+            with self.assertLogs('gogrepoc', level='WARNING') as logs:
+                self.assertFalse(g.apply_tag_options(a))
+            self.assertIn('no game without tags matches -ids', logs.output[0])
+        g.save_manifest(manifest_games()[:3])                                # every game has a tag
+        with self.assertLogs('gogrepoc', level='WARNING') as logs:
+            self.assertFalse(g.apply_tag_options(self.args(notags=True)))
+        self.assertIn('no game without tags in the manifest', logs.output[0])
+
+    def test_notags_with_a_manifest_without_tag_data_stops_the_command(self):
+        g.save_manifest([g.AttrDict(id=1, title='old')])
+        with self.assertLogs('gogrepoc', level='ERROR'):
+            self.assertFalse(g.apply_tag_options(self.args(notags=True)))
+        self.assertEqual(g.run_report.exit_status(), 1)
 
     def test_an_empty_selection_stops_instead_of_meaning_all_games(self):
         for a in (self.args(tags=['Favorites'], ids=['3']), self.args(tags=['Favorites'], skiptags=['Favorites'])):
@@ -179,6 +222,53 @@ class MainDispatchTests(TempDir):
             g.cmd_list([], [], [], [], [], 'ids', ['Favorites'], ['Completed'])
         self.assertEqual(buffer.getvalue().split(), ['one'])
 
+    def test_notags_reaches_every_command(self):
+        for command, extra in (('update', []), ('download', ['d']), ('verify', ['d']), ('import', ['s', 'd']), ('backup', ['s', 'd']), ('list', [])):
+            with self.subTest(command):
+                args = g.process_argv(['gogrepo_delta.py', command] + extra + ['-notags'])
+                self.assertTrue(args.notags)
+                self.assertFalse(g.process_argv(['gogrepo_delta.py', command] + extra).notags)
+                self.assertTrue(g.process_argv(['gogrepo_delta.py', command] + extra + ['-notags', '-skiptags', 'Completed']).notags)    # allowed together
+
+    def test_notags_and_tags_exclude_each_other(self):
+        for command, extra in (('update', []), ('download', ['d']), ('verify', ['d']), ('import', ['s', 'd']), ('backup', ['s', 'd']), ('list', [])):
+            with self.subTest(command), self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+                g.process_argv(['gogrepo_delta.py', command] + extra + ['-notags', '-tags', 'Favorites'])
+
+    def test_the_command_gets_the_ids_of_the_games_without_tags(self):
+        verify, status = self.run_verify('-notags')
+        self.assertEqual(verify.call_count, 1)
+        self.assertEqual(verify.call_args[0][8], ['4'])      # ids
+        self.assertEqual(status, 0)
+        verify, status = self.run_verify('-notags', '-ids', '1')           # nothing is left: the command does not run
+        self.assertEqual(verify.call_count, 0)
+
+    def test_update_gets_notags_from_main(self):
+        args = g.process_argv(['gogrepo_delta.py', 'update', '-notags'])
+        with mock.patch.object(g, 'cmd_update') as updating:
+            g.main(args)
+        self.assertEqual(updating.call_count, 1)
+        self.assertIs(updating.call_args[1]['notags'], True)
+        args = g.process_argv(['gogrepo_delta.py', 'update'])
+        with mock.patch.object(g, 'cmd_update') as updating:
+            g.main(args)
+        self.assertIs(updating.call_args[1]['notags'], False)
+
+    def test_list_gets_notags_itself(self):
+        args = g.process_argv(['gogrepo_delta.py', 'list', '-notags'])
+        with mock.patch.object(g, 'cmd_list') as listing:
+            g.main(args)
+        self.assertEqual(listing.call_args[0][8], True)
+
+    def test_list_shows_only_the_games_without_tags(self):
+        import io
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertLogs('gogrepoc', level='INFO') as logs:
+            g.cmd_list([], [], [], [], [], 'ids', [], [], True)
+        self.assertEqual(buffer.getvalue().split(), ['four'])
+        self.assertIn('1 of 4 games', '\n'.join(logs.output))
+
     def test_without_tag_options_nothing_changes(self):
         verify, status = self.run_verify()
         self.assertEqual((verify.call_args[0][8], verify.call_args[0][2]), ([], []))
@@ -192,11 +282,11 @@ class MainDispatchTests(TempDir):
 
 
 class UpdateTagTests(TempDir):
-    def update(self, request, tags=(), skiptags=(), full=True):
+    def update(self, request, tags=(), skiptags=(), full=True, notags=False):
         flags = (False, False, False) if full else (True, True, True)
         with mock.patch.object(g, 'request', request), mock.patch.object(g, 'makeGOGSession', lambda: SimpleNamespace(token={})):
             g.cmd_update(['windows'], ['en'], *flags, [], [], False, 'both', 'resume', False, False, False, False, False, False, False,
-                         tags=list(tags), skiptags=list(skiptags))
+                         tags=list(tags), skiptags=list(skiptags), notags=notags)
 
     def names(self):
         return dict((game.title, game.tag_names) for game in g.load_manifest())
@@ -218,6 +308,54 @@ class UpdateTagTests(TempDir):
     def test_tags_and_skiptags_together(self):
         self.update(api(self.TAGS), tags=['Favorites'], skiptags=['Completed'])
         self.assertEqual(sorted(self.names()), ['game_0'])
+
+    def test_notags_limit_the_update_to_the_games_without_tags(self):
+        self.update(api(self.TAGS), notags=True)
+        self.assertEqual(self.names(), {'game_2': []})
+
+    def test_notags_uses_the_tags_that_gog_sends_now(self):
+        self.update(api(self.TAGS))
+        self.update(api({0: [], 1: ['11'], 2: ['12']}), notags=True)             # the tags changed on GOG since the last update
+        self.assertEqual(sorted(self.names()), ['game_0', 'game_1', 'game_2'])    # nothing was removed ...
+        self.assertEqual(self.names()['game_0'], [])                              # ... the tags of the games not fetched were refreshed
+        self.assertEqual(self.names()['game_2'], ['NEXT TO PLAY'])
+
+    def test_notags_tells_the_narrowing_check_which_games_the_update_is_likely_to_fetch(self):
+        self.update(api(self.TAGS))                                               # the manifest now holds the tags
+        with mock.patch.object(g, 'warn_if_update_narrows_manifest') as check:
+            self.update(api(self.TAGS), notags=True)
+        self.assertEqual(check.call_args[0][4], ['1002'])                         # narrow_ids: game_2 is the only game without tags
+
+    def test_a_resumed_update_keeps_notags(self):
+        state = dict(fail=True)
+        base = api(self.TAGS)
+
+        def flaky(session, url, args=None, **kwargs):
+            if state['fail'] and '/gameDetails/1002' in url:
+                raise g.requests.exceptions.ConnectionError('temporary connection failure')
+            return base(session, url, args, **kwargs)
+        self.update(flaky, full=False, notags=True)                              # game_2 could not be fetched: the update is left incomplete
+        self.assertEqual([item.id for item in g.load_resume_manifest()[:-1]], [1002])
+        state['fail'] = False
+        real, restarts = g.cmd_update, []
+
+        def spy(*args, **kwargs):
+            restarts.append(kwargs)
+            return real(*args, **kwargs)
+        with mock.patch.object(g, 'cmd_update', spy):
+            self.update(flaky, full=False, notags=True)
+        self.assertEqual(len(restarts), 2)                                       # the run itself, then the restart of the requested update after the resume pass ...
+        self.assertTrue(restarts[0]['notags'] and restarts[1]['notags'])         # ... with the same tag options
+        self.assertEqual(sorted(self.names()), ['game_2'])
+
+    def test_notags_with_skiptags(self):
+        self.update(api(self.TAGS), notags=True, skiptags=['Completed'])
+        self.assertEqual(sorted(self.names()), ['game_2'])
+
+    def test_a_notags_update_never_removes_games_from_the_manifest(self):
+        self.update(api(self.TAGS))
+        self.update(api(self.TAGS, only=(0, 1)), notags=True)                    # game_2 left the account, the update is limited: nothing is removed
+        self.assertEqual(sorted(self.names()), ['game_0', 'game_1', 'game_2'])
 
     def test_the_tags_of_games_that_are_not_fetched_again_are_refreshed(self):
         self.update(api(self.TAGS))
