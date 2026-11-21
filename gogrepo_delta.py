@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.83'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.85'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -3377,9 +3377,10 @@ class TagSelection(object):
         self.fatal = False       # nothing can be decided (the manifest has no tag data)
 
 
-def select_games_by_tags(items, tags, skiptags):
-    """Which games do -tags and -skiptags mean? A game matches if it has ANY of the tags. A tag that no game has is a problem, with
-    the tags that exist, and a hint when the words of one tag were typed without quotes."""
+def select_games_by_tags(items, tags, skiptags, notags=False):
+    """Which games do -tags, -skiptags and -notags mean? A game matches -tags if it has ANY of the tags; -notags selects the games that have no
+    tag at all (it is never combined with -tags). A tag that no game has is a problem, with the tags that exist, and a hint when the words of
+    one tag were typed without quotes."""
     result = TagSelection()
     known = {}
     for game in items:
@@ -3387,7 +3388,7 @@ def select_games_by_tags(items, tags, skiptags):
             known.setdefault(tag_key(name), name)
     if not any('tag_names' in game for game in items):
         result.fatal = True
-        result.problems.append(('-tags' if tags else '-skiptags', 'no tag data',
+        result.problems.append(('-tags' if tags else '-notags' if notags else '-skiptags', 'no tag data',
                                 "The manifest holds no tag data yet. Run 'update' once: it reads your tags from GOG and keeps them in the manifest."))
         return result
 
@@ -3407,6 +3408,8 @@ def select_games_by_tags(items, tags, skiptags):
     if tags:
         keys = tag_keys(tags)
         result.selected = set(game.id for game in items if game_has_any_tag(game, keys))
+    elif notags:
+        result.selected = set(game.id for game in items if 'tag_names' in game and not game_tag_names(game))     # an entry without tag data is unknown, not tagless
     if skiptags:
         keys = tag_keys(skiptags)
         result.skipped = set(game.id for game in items if game_has_any_tag(game, keys))
@@ -3417,17 +3420,17 @@ def apply_tag_options(args):
     """For download, verify, import and backup: turns -tags and -skiptags into the ids that -ids / -skipids already handle, so those
     commands need no change. -tags together with -ids means the games that are in both. Returns False when nothing is left to do
     (or nothing can be decided); an empty selection must never fall through as 'all games'."""
-    tags, skiptags = list(args.tags or []), list(args.skiptags or [])
-    if not tags and not skiptags:
+    tags, skiptags, notags = list(args.tags or []), list(args.skiptags or []), bool(getattr(args, 'notags', False))
+    if not tags and not skiptags and not notags:
         return True
     items = load_manifest(require_existing=True)
-    selection = select_games_by_tags(items, tags, skiptags)
+    selection = select_games_by_tags(items, tags, skiptags, notags)
     for what, why, message in selection.problems:
         error(message)
         run_report.fail(what, why)
     if selection.fatal:
         return False
-    if tags:
+    if tags or notags:
         chosen = set(selection.selected)
         if args.ids:
             resolved = resolve_game_ids(items, args.ids, '-ids')
@@ -3435,9 +3438,15 @@ def apply_tag_options(args):
             chosen &= resolved.selected
         chosen -= selection.skipped
         if not chosen:
-            warn('no game matches the tag(s) {%s}%s' % (', '.join(tags), ' and -ids' if args.ids else ''))
+            if notags:
+                warn('no game without tags%s' % (' matches -ids' if args.ids else ' in the manifest'))
+            else:
+                warn('no game matches the tag(s) {%s}%s' % (', '.join(tags), ' and -ids' if args.ids else ''))
             return False
-        info('-tags {%s}%s: %d game(s)' % (', '.join(tags), ' with -ids' if args.ids else '', len(chosen)))
+        if notags:
+            info('-notags%s: %d game(s)' % (' with -ids' if args.ids else '', len(chosen)))
+        else:
+            info('-tags {%s}%s: %d game(s)' % (', '.join(tags), ' with -ids' if args.ids else '', len(chosen)))
         args.ids = [str(game_id) for game_id in sorted(chosen, key=str)]
     if skiptags:
         info('-skiptags {%s}: skipping %d game(s)' % (', '.join(skiptags), len(selection.skipped)))
@@ -3478,13 +3487,14 @@ def _pad(text, width, right=False):
 LIST_OS_NAMES = {'windows': 'win', 'linux': 'lin', 'mac': 'mac', MOVIE_OS_TYPE: 'vid'}
 
 
-def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_format='table', tags=(), skiptags=()):
+def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_format='table', tags=(), skiptags=(), notags=False):
     """Shows the games in the manifest, or the ones that match the words. Needs no login and no network. -tags and -skiptags (the tags of your
-    GOG library, kept in the manifest by update) work as in download, verify, import and backup; they also select movies, if the movies have tags."""
+    GOG library, kept in the manifest by update) and -notags (only the games without any tag) work as in download, verify, import and backup;
+    they also select movies, if the movies have tags."""
     all_items = items = load_manifest(require_existing=True)
     tags, skiptags = list(tags or []), list(skiptags or [])
-    if tags or skiptags:
-        selection = select_games_by_tags(all_items, tags, skiptags)
+    if tags or skiptags or notags:
+        selection = select_games_by_tags(all_items, tags, skiptags, notags)
         for what, why, message in selection.problems:
             error(message)
             run_report.fail(what, why)
@@ -3493,7 +3503,7 @@ def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_forma
         items = [game for game in all_items if (selection.selected is None or game.id in selection.selected) and game.id not in selection.skipped]
         if not items:
             if not selection.problems:          # an unknown tag was reported above
-                error('no game matches the tag filter: %s.' % '; '.join(part for part in ('-tags ' + ' '.join(tags) if tags else '', '-skiptags ' + ' '.join(skiptags) if skiptags else '') if part))
+                error('no game matches the tag filter: %s.' % '; '.join(part for part in ('-tags ' + ' '.join(tags) if tags else '', '-notags' if notags else '', '-skiptags ' + ' '.join(skiptags) if skiptags else '') if part))
                 run_report.fail('list', 'no game matches the tags')
             return
     wanted_langs = set(LANG_TABLE[lang] for lang in lang_list)
@@ -3507,10 +3517,11 @@ def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_forma
 
     files_of, candidates = {}, []
     for game in items:
-        installers = [e for kind in ('downloads', 'galaxyDownloads', 'sharedDownloads') for e in getattr(game, kind, [])
-                      if passes(e)]
-        if filtered and not installers:
-            continue
+        every_installer = [e for kind in ('downloads', 'galaxyDownloads', 'sharedDownloads') for e in getattr(game, kind, [])]
+        installers = [e for e in every_installer if passes(e)]
+        if filtered and every_installer and not installers:
+            continue                    # it has installers, but none for this system / language. A game with no installer at all (only extras, which
+                                        # belong to no system or language, or nothing) stays: the filter has nothing to decide about it, as in download
         files_of[id(game)] = (installers, list(getattr(game, 'extras', [])))
         candidates.append(game)
     found = search_games(candidates, words)
@@ -3518,7 +3529,7 @@ def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_forma
         shown = ' '.join(words)
         filter_text = '; '.join(part for part in ('-os ' + ' '.join(os_list) if os_list else '', '-skipos ' + ' '.join(skipos_list) if skipos_list else '',
                                                   '-lang ' + ' '.join(lang_list) if lang_list else '', '-skiplang ' + ' '.join(skiplang_list) if skiplang_list else '',
-                                                  '-tags ' + ' '.join(tags) if tags else '', '-skiptags ' + ' '.join(skiptags) if skiptags else '') if part)
+                                                  '-tags ' + ' '.join(tags) if tags else '', '-notags' if notags else '', '-skiptags ' + ' '.join(skiptags) if skiptags else '') if part)
         filter_note = ' The filter in use is: %s (typed, or the defaults from the config file).' % filter_text if filter_text else ''
         if words:
             hidden = search_games(items, words) if filtered else []        # the games the words fit, before the filter took some out
@@ -3602,7 +3613,9 @@ def build_parser():
     g5 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g5.add_argument('-ids', action='store', help='id(s)/titles(s) of (a) specific game(s) to update', nargs='*', default=[])
     g5.add_argument('-skipids', action='store', help='id(s)/titles(s) of (a) specific game(s) not to update', nargs='*', default=[])
-    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt = g1.add_mutually_exclusive_group()  # below are mutually exclusive
+    gt.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt.add_argument('-notags', action='store_true', help='only the games that have no tag at all in your GOG library (not together with -tags)')
     g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     g1.add_argument('-movies', action='store_true', help='also put your GOG movies into the manifest (opt-in: a movie can be many gigabytes). Movies are not chosen by -os; without this switch an update leaves the movies of the manifest as they are')
     g1.add_argument('-moviequality', action='store', default='best', help='which video variants of a movie to take: best (the highest resolution, the default), all, a quality such as 1080p or 720p or dvd, max:<quality> (the best that is not above it, e.g. max:1080p), or a list in the order of preference (1080p,720p); if none of the listed is offered the best is taken. Subtitles are always taken')
@@ -3624,7 +3637,9 @@ def build_parser():
     g3 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g3.add_argument('-ids', action='store', help='id(s) or title(s) of the game in the manifest to download', nargs='*', default=[])
     g3.add_argument('-skipids', action='store', help='id(s) or title(s) of the game(s) in the manifest to NOT download', nargs='*', default=[])
-    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt = g1.add_mutually_exclusive_group()  # below are mutually exclusive
+    gt.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt.add_argument('-notags', action='store_true', help='only the games that have no tag at all in your GOG library (not together with -tags)')
     g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     g3.add_argument('-id', action='store', help='(deprecated) id or title of the game in the manifest to download')
     g1.add_argument('-covers', action='store_true', help='downloads cover images for each game')
@@ -3667,7 +3682,9 @@ def build_parser():
     g5 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g5.add_argument('-ids', action='store', help='id(s) or title(s) of the game in the manifest to import', nargs='*', default=[])
     g5.add_argument('-skipids', action='store', help='id(s) or title(s) of the game(s) in the manifest to NOT import', nargs='*', default=[])
-    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt = g1.add_mutually_exclusive_group()  # below are mutually exclusive
+    gt.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt.add_argument('-notags', action='store_true', help='only the games that have no tag at all in your GOG library (not together with -tags)')
     g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
 
 
@@ -3677,7 +3694,9 @@ def build_parser():
     g5 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g5.add_argument('-ids', action='store', help='id(s) or title(s) of the game in the manifest to backup', nargs='*', default=[])
     g5.add_argument('-skipids', action='store', help='id(s) or title(s) of the game(s) in the manifest to NOT backup', nargs='*', default=[])
-    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt = g1.add_mutually_exclusive_group()  # below are mutually exclusive
+    gt.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt.add_argument('-notags', action='store_true', help='only the games that have no tag at all in your GOG library (not together with -tags)')
     g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     g2 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g2.add_argument('-skipos', action='store', help='skip backup of game files for operating system(s)', nargs='*', default=[])
@@ -3712,7 +3731,9 @@ def build_parser():
     g3 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g3.add_argument('-ids', action='store', help='id(s) or title(s) of the game in the manifest to verify', nargs='*', default=[])
     g3.add_argument('-skipids', action='store', help='id(s) or title(s) of the game[s] in the manifest to NOT verify', nargs='*', default=[])
-    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt = g1.add_mutually_exclusive_group()  # below are mutually exclusive
+    gt.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    gt.add_argument('-notags', action='store_true', help='only the games that have no tag at all in your GOG library (not together with -tags)')
     g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     g3.add_argument('-id', action='store', help='(deprecated) id or title of the game in the manifest to verify')
     g1.add_argument('-skipfiles', action='store', help='file name (or glob patterns) to NOT verify', nargs='*', default=[])
@@ -3740,7 +3761,9 @@ def build_parser():
     g5 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g5.add_argument('-skiplang', action='store', help='leave out games that only have files for language(s)', nargs='*', default=[])
     g5.add_argument('-lang', action='store', help='only games that have files for language(s) (default: all)', nargs='*', default=[])
-    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); movies with the tag are listed too', nargs='*', default=[])
+    gt = g1.add_mutually_exclusive_group()  # below are mutually exclusive
+    gt.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); movies with the tag are listed too', nargs='*', default=[])
+    gt.add_argument('-notags', action='store_true', help='only the games that have no tag at all in your GOG library (not together with -tags)')
     g1.add_argument('-skiptags', action='store', help='leave out the games with one of these tags of your GOG library', nargs='*', default=[])
     g1.add_argument('-format', action='store', choices=['table', 'ids'], default='table', help='table (default), or ids: only the title of each game, one per line, for scripts')
     add_common_flags(g1)
@@ -3972,7 +3995,8 @@ CONFIG_NOTES = [
     (None, (('ids', 'games to include, by id or title'),
             ('skipids', 'games to skip, by id or title'))),
     (None, (('tags', 'only games with one of these tags of your GOG library (update stores the tags in the manifest)'),
-            ('skiptags', 'skip games with one of these tags'))),
+            ('skiptags', 'skip games with one of these tags'),
+            ('notags', 'only games that have no tag at all (not together with tags)'))),
     (None, (('wait', 'wait this many hours before starting'),)),
     (None, (('diagnostic', 'probe GOG more thoroughly for the diagnostics command (slower, more warnings)'),)),
     (None, (('savedir', 'folder the games are saved in (export: also checks which files exist there and adds an "on disk" column)'),)),
@@ -4846,12 +4870,12 @@ def warn_if_update_narrows_manifest(gamesdb, os_list, lang_list, lang_fallback, 
          '(-os, -lang), or put them into the config file.')
 
 
-def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,diagnostic,lang_fallback=None,tags=None,skiptags=None,movies=False,moviequality='best'):
+def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,diagnostic,lang_fallback=None,tags=None,skiptags=None,movies=False,moviequality='best',notags=False):
     media_type = GOG_MEDIA_TYPE_GAME
     quality_tokens = parse_movie_quality(moviequality)
     tags, skiptags = list(tags or []), list(skiptags or [])    # entry 39: -tags / -skiptags (names of the tags of your GOG library)
     tag_wanted, tag_unwanted = tag_keys(tags), tag_keys(skiptags)
-    tag_filter = bool(tags or skiptags)
+    tag_filter = bool(tags or skiptags or notags)
     known_tag_keys, tags_refreshed, pages_complete, tag_skipped_count = set(), 0, False, 0
     items = []
     known_ids = []
@@ -4928,6 +4952,8 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         save_md5xmls = md5xmls
         save_noChangeLogs = noChangeLogs
         save_diagnostic = diagnostic
+        save_movies = movies                    # the request of this run; the resume pass below uses what the interrupted run saved
+        save_moviequality = moviequality
         try:
             partial = resumeprops['partial']
         except KeyError:
@@ -4984,7 +5010,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
 
         narrow_ids, narrow_skipids = ids, skipids
         if tag_filter:      # the manifest's own tag data tells which games this update is likely to fetch
-            guess = select_games_by_tags(gamesdb, tags, skiptags)
+            guess = select_games_by_tags(gamesdb, tags, skiptags, notags)
             if not guess.fatal:
                 if guess.selected is not None and not ids:
                     narrow_ids = [str(game_id) for game_id in guess.selected] or ids
@@ -5081,6 +5107,8 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
 
                             if tag_wanted and not game_has_any_tag(item, tag_wanted):
                                 continue                # not one of the tagged games
+                            if notags and game_tag_names(item):
+                                continue                # -notags: this game has a tag (item.tag_names is what GOG sent just now)
                             if tag_unwanted and game_has_any_tag(item, tag_unwanted):
                                 info('skipping "{}" (has a tag from -skiptags)'.format(item.title))
                                 tag_skipped_count += 1
@@ -5357,7 +5385,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         info('resume completed')
         if (resumemode != 'onlyresume'):
             info('returning to specified download request...')
-            cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs,save_diagnostic,lang_fallback=save_lang_fallback,tags=tags,skiptags=skiptags)
+            cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs,save_diagnostic,lang_fallback=save_lang_fallback,tags=tags,skiptags=skiptags,movies=save_movies,moviequality=save_moviequality,notags=notags)
 
 def cmd_output_diagnostic_data(verbose):
     gamesdb = load_manifest(require_existing=True)
@@ -8329,7 +8357,7 @@ def main(args):
     if args.command == 'list':
         consoleHandler.setStream(sys.stderr)    # the list itself goes to stdout, so it can be piped or redirected; messages to stderr
 
-    if args.command in ('download', 'verify', 'import', 'backup') and (args.tags or args.skiptags):
+    if args.command in ('download', 'verify', 'import', 'backup') and (args.tags or args.skiptags or args.notags):
         if getattr(args, 'id', None):
             args.ids = [args.id]
         if not apply_tag_options(args):      # nothing to do, or no tag data: stop here, never fall through to 'all games'
@@ -8352,7 +8380,7 @@ def main(args):
             time.sleep(args.wait * 60 * 60)
         if not args.installers:
             args.installers = "standalone"
-        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs,args.diagnostic,lang_fallback=args.lang_fallback,tags=args.tags,skiptags=args.skiptags,movies=args.movies,moviequality=args.moviequality)
+        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs,args.diagnostic,lang_fallback=args.lang_fallback,tags=args.tags,skiptags=args.skiptags,movies=args.movies,moviequality=args.moviequality,notags=args.notags)
     elif args.command == 'download':
         if (args.id):
             args.ids = [args.id]
@@ -8405,7 +8433,7 @@ def main(args):
     elif args.command == 'clean':
         cmd_clean_stages(args.gamedir, args.orphans, args.partials, args.provisional, args.trash, args.installers, args.images, args.folders, args.relaxed, args.dryrun, args.all, args.yes)
     elif args.command == 'list':
-        cmd_list(args.words, args.os, args.skipos, args.lang, args.skiplang, args.format, args.tags, args.skiptags)
+        cmd_list(args.words, args.os, args.skipos, args.lang, args.skiplang, args.format, args.tags, args.skiptags, args.notags)
     elif args.command == 'export':
         cmd_export(args.output, args.savedir, args.delimiter)
     elif args.command == 'wishlist':

@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.83-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.85-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -48,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.83` |
+| **Current version** | `v0.5.85` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort: a CI job tries both and is allowed to fail) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -303,7 +303,7 @@ Useful options:
 - `--updateonly`: only update games GOG marks as updated.
 - `--full`: update all games in the account.
 - `--ids ID ...` / `--skipids ID ...`: include or exclude selected games.
-- `--tags TAG ...` / `--skiptags TAG ...`: include or exclude games by the tags of your GOG library (see [Selecting games by tag](#selecting-games-by-tag)).
+- `--tags TAG ...` / `--skiptags TAG ...` / `--notags`: include or exclude games by the tags of your GOG library, or take only the games without any tag (see [Selecting games by tag](#selecting-games-by-tag)).
 - `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
 - `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
 - `--skiphidden`: skip games marked as hidden.
@@ -351,7 +351,7 @@ python gogrepo_delta.py download --ids game_id
 Useful options:
 - `--dryrun`: show what would be downloaded without downloading.
 - `--ids ID ...` / `--skipids ID ...`: include or exclude games.
-- `--tags TAG ...` / `--skiptags TAG ...`: include or exclude games by tag.
+- `--tags TAG ...` / `--skiptags TAG ...` / `--notags`: include or exclude games by tag, or take only the games without any tag.
 - `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
 - `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
 - `--skipextras`: skip bonus content.
@@ -380,7 +380,7 @@ Useful options:
 - `--noclean`: leave files that fail integrity checks in place.
 - `--clean`: deprecated; cleaning is already the default.
 - `--ids ID ...` / `--skipids ID ...`: include or exclude games.
-- `--tags TAG ...` / `--skiptags TAG ...`: include or exclude games by tag.
+- `--tags TAG ...` / `--skiptags TAG ...` / `--notags`: include or exclude games by tag, or take only the games without any tag.
 - `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
 - `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
 - `--skipfiles FILE ...`: skip filenames or glob patterns.
@@ -408,7 +408,7 @@ python gogrepo_delta.py import "/old/GOG collection" "/new/GOG collection"
 
 Files are imported only when their MD5 checksums match manifest entries.
 
-Options include `--ids ID ...`, `--skipids ID ...`, `--tags TAG ...`, `--skiptags TAG ...`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
+Options include `--ids ID ...`, `--skipids ID ...`, `--tags TAG ...`, `--skiptags TAG ...`, `--notags`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
 
 ### `backup`
 
@@ -418,7 +418,7 @@ python gogrepo_delta.py backup "/path/to/source" "/path/to/backup"
 
 Creates an incremental backup by copying known files from the source collection to the destination.
 
-Options include `--ids ID ...`, `--skipids ID ...`, `--tags TAG ...`, `--skiptags TAG ...`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipextras`, `--skipgames`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
+Options include `--ids ID ...`, `--skipids ID ...`, `--tags TAG ...`, `--skiptags TAG ...`, `--notags`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipextras`, `--skipgames`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
 
 ### `list`
 
@@ -433,8 +433,8 @@ Search terms are matched against game IDs, titles, and names; all supplied words
 
 - `--format table`: readable table output (default).
 - `--format ids`: one game title/ID per line for use in scripts.
-- `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`: filter the listed games. By default `list` shows all systems and languages (it does not use the computer's defaults), but values from the config file apply. The files of a movie belong to every operating system, so `--os` never hides a movie (`--lang` still applies).
-- `--tags TAG ...` / `--skiptags TAG ...`: list only the games (and movies) with one of the tags of your GOG library, or leave those out (see [Selecting games by tag](#selecting-games-by-tag)). Tag your movies on GOG, run `update` once, and `list --tags Movies` shows only the movies. The table has no tags column, because an item can have several tags.
+- `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`: filter the listed games. By default `list` shows all systems and languages (it does not use the computer's defaults), but values from the config file apply. The files of a movie belong to every operating system, so `--os` never hides a movie (`--lang` still applies). These filters decide about installers: a game that has no installer at all (only extras, which belong to no system or language, or no files) is always listed, with `-` in OS and LANG; a game whose installers do not fit is hidden.
+- `--tags TAG ...` / `--skiptags TAG ...` / `--notags`: list only the games (and movies) with one of the tags of your GOG library, or leave those out, or only those without any tag (see [Selecting games by tag](#selecting-games-by-tag)). Tag your movies on GOG, run `update` once, and `list --tags Movies` shows only the movies. The table has no tags column, because an item can have several tags.
 
 If nothing is found, `list` says why and exits with `1`: either no game matches the words (with suggestions), or games match but none has files for the chosen operating system / language (the message names the games and the filter in use, which may come from the config file).
 
@@ -547,7 +547,7 @@ Generates diagnostic information intended for maintenance and troubleshooting. `
 
 ## Selecting games by tag
 
-`--tags` and `--skiptags` use the tags you made in your GOG library (for example "Favorites" or "NEXT TO PLAY"). They work with `update`, `download`, `verify`, `import`, `backup` and `list`:
+`--tags`, `--skiptags` and `--notags` use the tags you made in your GOG library (for example "Favorites" or "NEXT TO PLAY"). They work with `update`, `download`, `verify`, `import`, `backup` and `list`:
 
 ```bash
 python gogrepo_delta.py update
@@ -559,6 +559,7 @@ python gogrepo_delta.py verify --tags "NEXT TO PLAY" Completed --skiptags Abando
 - A game matches if it has **any** of the tags given. Case, accents and punctuation do not matter. A tag with spaces must be in quotes.
 - `--tags` together with `--ids` means the games that are in both. `--skiptags` always wins.
 - A tag that no game has is an error (the message lists the tags that exist). If nothing is left to do, the command stops instead of running on all games.
+- `--notags` takes only the games (and movies) that have no tag at all, for example to find what you have not sorted yet: `python gogrepo_delta.py list --notags`. It cannot be used together with `--tags` (the program refuses), but it can be used with `--skiptags` and `--ids`. A game whose tags are not known to the manifest yet (an old entry) does not count as "without tags"; `update` refreshes the tags of all games, so run it once if `--notags` misses games. It works with every command that takes `--tags`, also in the config file (`notags = yes`).
 - In `list` the tags are one more filter, together with the words, `--os` and `--lang` (an item must pass all of them). `list` reads the manifest only: it needs no login and changes nothing.
 - `update --tags` limits what is fetched but keeps the usual rule of what counts (new and updated games; add `--full` for all of them). Like `--ids`, a tag-limited update never removes games from the manifest.
 

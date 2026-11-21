@@ -31,6 +31,51 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.85 - 21.11.2026 - `list` keeps the games that have no installer; a resumed update keeps `-movies`
+
+- **`list` no longer hides games that have no installer at all when `-os`, `-skipos`, `-lang` or `-skiplang` is used.** A game with only extras (like
+  `gwent_the_witcher_card_game` and `hotline_miami_2_wrong_number_digital_comics` of the maintainer's manifest) or with no files has no installer that could pass the
+  filter, so it was dropped, although `download` takes the extras of such a game whatever `-os` and `-lang` say (extras belong to no system or language). The filters
+  decide about installers: now a game is hidden only if it has installers and none of them fits. The games without installers show `-` in OS and LANG, as before
+  without a filter; extras still count in FILES and SIZE. A game with installers for another system only (and extras) is still hidden: otherwise `list -os windows` would
+  show Linux-only games. `update`, `download` and the other commands were not changed (checked: `update` keeps such games, `download` keeps their extras).
+- **A resumed update keeps `-movies` and `-moviequality` of the request.** When `update` found an unfinished update, it ran the resume pass with the settings saved
+  by the interrupted run and then started the requested update again, but that restart did not pass `-movies` and `-moviequality` on: a request with `-movies` fetched
+  no movies at all after a resume pass. The restart now gets the values of the request, saved before the resume pass replaces them (`save_movies`,
+  `save_moviequality`, like the other `save_*` values). The resume pass itself is unchanged: it still uses what the interrupted run saved.
+- **A test that pinned the old behaviour was rewritten.** `test_an_old_resume_file_without_the_settings_means_no_movies` ran its request with `movies=True` and asserted that no
+  movie is fetched; that was the bug. It now runs without `-movies`, and a new test covers what it meant (the resume pass has no movies; the restart of a request with
+  `-movies` fetches them, with the request's `-moviequality`).
+- **Tests:** `tests/test_movies.py` has 3 more for the resume restart (the resume pass with the saved settings and then the request with its own, a resume with `-movies`
+  and `-moviequality`, and no movies when the request has none while the movies in the manifest are left alone), 1 rewritten (above), and 3 more for `list` (games without
+  installers with every filter, games whose installers do not fit are still hidden, words / ids / tags with them and the "but none has files" message). 8 mutations of
+  these changes were checked and all were caught. Observation: the real GOG answer in `tests/data/movies` tags every
+  movie `MOVIE`, so `list -tags MOVIE` works even without tags of your own.
+
+DIFFERENCE: `list` with `-os` / `-lang` shows more (the games without installers); `update -movies` after an interrupted update now really fetches the movies.
+
+## 0.5.84 - 20.11.2026 - `-notags`: only the games without any tag, in all six commands
+
+- **New switch `-notags`** for `list`, `update`, `download`, `verify`, `import` and `backup` (and `notags = yes` in the config file). It selects only the items that
+  have no tag at all in your GOG library, movies included, for example to find what you have not sorted yet: `list -notags`. It is the missing counterpart of `-tags`:
+  before, items without tags could only be reached by `-skiptags` with the name of every tag you have.
+- **Rules.** `-notags` and `-tags` exclude each other (argparse refuses the pair; in the config file, the option typed on the command line wins and the other one
+  from the file is dropped, as with `-os`/`-skipos`). `-notags` can be used with `-skiptags`, `-ids`, `-skipids` and the other filters; an item must pass all of
+  them. If nothing is left, the command stops and says so (`no game without tags in the manifest`, `... matches -ids`), it never falls back to "all games"; `list`
+  fails the run (exit code 1) as it does for `-tags`.
+- **Safe with old data.** A manifest entry that has no `tag_names` field at all (never refreshed) is *unknown*, not "without tags", so `download -notags` can never
+  pick games only because their tags have not been read yet. A manifest with no tag data at all stops with the usual message to run `update` once.
+- **`update -notags`** uses the tags GOG sends in that very run (`item.tag_names`), like `-tags` and `-skiptags`; the tags of the games not fetched are refreshed, and
+  a run limited by `-notags` never removes games from the manifest. A resumed update keeps `-notags` (`cmd_update` passes it on when it restarts itself).
+- `select_games_by_tags()` and `cmd_list()` have a new last parameter `notags=False`; `cmd_update()` too. The README and the help text are updated.
+- **Tests:** `tests/test_tags.py` has 18 more (selection, ids for the id-based commands, a manifest without tag data, entries without tag data, the options in every
+  command, `-tags` plus `-notags` refused, dispatch to `verify`, `update` and `list`, and `update` with `-notags` with fresh tags, with `-skiptags`, never removing
+  games, the narrowing check, and a resumed update); `tests/test_movies.py` has 2 more (movies without tags in `list`, nothing left); `tests/test_config.py` has 1
+  more (`notags` from the file, and the exclusion with `tags`). 16 mutations of this change were checked; the 3 that survived at first (dispatch of `update`, the
+  narrowing check, the restart of a resumed update) got their own tests.
+
+DIFFERENCE: only a new option; nothing changes without it. If you set `notags = yes` in `[common]`, every command that takes tags obeys it.
+
 ## 0.5.83 - 20.11.2026 - `list` takes `-tags` and `-skiptags`
 
 - **`list` can be limited by the tags of your GOG library.** `-tags TAG ...` lists only the items that have one of the tags (any of them), `-skiptags TAG ...` leaves
