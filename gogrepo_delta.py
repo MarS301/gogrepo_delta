@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.85'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.86'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -1791,23 +1791,64 @@ def save_resume_manifest(items):
     save_manifest_core_worker(items,RESUME_MANIFEST_FILENAME,True)
     info('saved resume manifest')
 
+def _stop_for_resume_file(filepath, problem, cannot_read=False):
+    """The resume file exists but cannot be used: say so and stop (exit status 1). It only remembers which games of an unfinished update are
+    still to be fetched, so nothing is lost but time, but it must never silently turn into a fresh update."""
+    advice = ("To go on, delete the file: the next update then starts without it." if not cannot_read else
+              "Check the file and its permissions, and whether another program uses it. Deleting it also lets the update go on (it then starts without it).")
+    if os.path.exists(filepath + BACKUP_EXT):
+        advice += " Or copy %s over it." % (filepath + BACKUP_EXT)
+    error("The resume file '%s' %s. It only remembers which games of an unfinished update are still to be fetched. Nothing was changed, and the run "
+          "stops here so that it is not mistaken for 'nothing to resume'. %s" % (filepath, problem, advice))
+    raise SystemExit(1)
+
 def load_resume_manifest(filepath=RESUME_MANIFEST_FILENAME):
+    """The items of the resume file: the games and, last, the properties record. [] if there is no file. A file that exists but cannot be read
+    or understood stops the program with a message (it is never taken for 'no file')."""
     info('loading local resume manifest...')
     try:
         with open(filepath, mode='r', encoding='utf-8') as r:
             text = r.read()
-        try:
-            json_items = manifest_from_json(text)
-        except ManifestDamaged as e:
-            error("%s is damaged (%s). Delete it to continue without resuming, or restore %s." % (filepath, e, filepath + BACKUP_EXT))
-            raise SystemExit(1)
-        if json_items is not None:
-            return json_items
-        ad = text.replace('{', 'AttrDict(**{').replace('}', '})')
-        ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
-        return _load_legacy_literal(ad)
-    except IOError:
+    except FileNotFoundError:
         return []
+    except (OSError, UnicodeDecodeError) as e:
+        _stop_for_resume_file(filepath, "cannot be read (%s)" % e, cannot_read=True)
+    try:
+        items = manifest_from_json(text)
+        if items is None:                   # the old format: Python literals, read without running anything. The text is not changed first (a text
+                                            # replacement of '{' and '}' would also change braces inside titles and changelogs)
+            items = _load_legacy_literal(re.sub(r"'size': ([0-9]+)L,", r"'size': \1,", text))
+    except ManifestDamaged as e:
+        _stop_for_resume_file(filepath, "is damaged (%s)" % e)
+    except Exception as e:                  # a damaged old-format file can raise any of several errors
+        _stop_for_resume_file(filepath, "is damaged (%s: %s)" % (type(e).__name__, e))
+    if not isinstance(items, list) or not items:
+        _stop_for_resume_file(filepath, "is damaged (it holds no list of games and properties)")
+    return items
+
+def check_resume_manifest(items, filepath=RESUME_MANIFEST_FILENAME):
+    """The properties record of the resume file's items (the last one, as load_resume_manifest returns them), after a check of what update relies on.
+    Anything that does not fit stops the program with a message: a damaged resume file is never taken for 'nothing to resume'."""
+    props = items[-1]
+    if not isinstance(props, dict):
+        _stop_for_resume_file(filepath, "is damaged (its last entry is not the properties record)")
+    if not all(isinstance(item, dict) for item in items[:-1]):
+        _stop_for_resume_file(filepath, "is damaged (an entry for a game is not a record)")
+    counts = props.get('failure_counts')
+    if counts is not None and not (isinstance(counts, dict) and all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                                                                      for k, v in counts.items())):
+        _stop_for_resume_file(filepath, "is damaged ('failure_counts' is not a table of game ids and counts)")
+    if 'complete' in props and not isinstance(props['complete'], bool):
+        _stop_for_resume_file(filepath, "is damaged ('complete' is neither yes nor no)")
+    if props.get('resume_manifest_syntax_version', -1) == RESUME_MANIFEST_SYNTAX_VERSION:
+        if 'complete' not in props:
+            _stop_for_resume_file(filepath, "is damaged ('complete' is missing)")
+        if not props['complete']:
+            # a file of this version that is not complete is going to be resumed: what that needs must be there, and of the right kind
+            for key, kind in (('os_list', list), ('lang_list', list), ('installers', str), ('strict', bool)):
+                if not isinstance(props.get(key), kind):
+                    _stop_for_resume_file(filepath, "is damaged ('%s' is missing or of the wrong kind)" % key)
+    return props
 
 def open_notrunc(name, bufsize=4*1024):
     flags = os.O_WRONLY | os.O_CREAT
@@ -4902,18 +4943,19 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
 
     failure_counts = {}     # game id (as text: the manifest is JSON) -> how many times in a row its details could not be fetched; kept in the resume
                             # manifest, also when it is complete
-    try:
-        resumedb = load_resume_manifest()
-        resumeprops = resumedb.pop()
+    resumedb = load_resume_manifest()           # [] if there is no resume file; a file that cannot be used stops the run (with a message)
+    if not resumedb:
+        resumedb = None
+        needresume = False
+    else:
+        resumeprops = check_resume_manifest(resumedb)
+        resumedb.pop()                          # the properties record
         failure_counts = dict(resumeprops.get('failure_counts') or {})
-        needresume = resumemode != "noresume" and not resumeprops['complete']
-        try:
-            resume_manifest_syntax_version = resumeprops['resume_manifest_syntax_version']
-        except KeyError:
-            resume_manifest_syntax_version = -1
+        needresume = resumemode != "noresume" and not resumeprops.get('complete', False)       # (checked above: a file of this version has 'complete')
+        resume_manifest_syntax_version = resumeprops.get('resume_manifest_syntax_version', -1)
         if resume_manifest_syntax_version != RESUME_MANIFEST_SYNTAX_VERSION:
             warn('Incompatible Resume Manifest Version Detected.')
-            if resumeprops['complete']:
+            if resumeprops.get('complete', False):
                 warn('Incompatible Resume Manifest Has Already Been Completed And Will Be Automatically Discarded')
                 resumedb = None
                 needresume = False
@@ -4921,7 +4963,12 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 inp = None
 
                 while (inp not in ["D","d","A","a"]):
-                    inp = input("(D)iscard incompatible manifest or (A)bort? (D/d/A/a): ")
+                    try:
+                        inp = input("(D)iscard incompatible manifest or (A)bort? (D/d/A/a): ")
+                    except EOFError:            # nobody can answer (a scheduled task): do not guess
+                        error("The resume file '%s' is of an incompatible version and cannot be asked about here (no terminal). Nothing was changed. "
+                              "Run 'update' in a terminal to discard or keep it, or delete the file to start without it." % RESUME_MANIFEST_FILENAME)
+                        raise SystemExit(1)
 
                     if (inp in ["D","d"]):
                         warn("Discarding")
@@ -4930,9 +4977,6 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                     elif (inp in ["A","a"]):
                         warn("Aborting")
                         sys.exit()
-    except Exception:
-        resumedb = None
-        needresume = False
 
     if (needresume):
         info('incomplete update detected, resuming...')

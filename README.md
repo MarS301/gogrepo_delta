@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.85-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.86-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -48,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.85` |
+| **Current version** | `v0.5.86` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort: a CI job tries both and is allowed to fail) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -311,6 +311,11 @@ Useful options:
   A game whose details cannot be fetched (a network problem, bad data) is kept in the resume manifest and tried again by the next
   updates, which come before the update you asked for. After `resume_retry_count` retries (config file, default 3) it is given up, so that it no
   longer holds back your updates; every update that includes it still tries it once and reports the failure (exit status 1) until it works.
+  A resume file that is missing means "nothing to resume". One that exists but cannot be read or understood (cut off, not text, wrong content, no
+  permission) stops `update` with a message and exit status 1, before anything is fetched or changed, and it is never taken for "nothing to resume". It
+  only remembers which games of an unfinished update are still to be fetched, so you can delete it (the next update then starts without it) or, if there
+  is one, copy `gog-resume-manifest.dat.bak` over it. This also applies with `--resumemode noresume`. A resume file of an incompatible version asks what to do
+  (discard or abort); without a terminal (a scheduled task) it stops with a message instead.
 - `--strictverify`: clear a previous verified state unless the MD5 matches.
 - `--strictdupe`: use stricter duplicate matching when MD5 data is missing.
 - `--lenientdownloadsupdate`: do not mark installers for update solely because their update timestamp changed when MD5 data is unavailable or differs.

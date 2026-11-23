@@ -31,6 +31,37 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.86 - 21.11.2026 - the resume file: braces in old-format files (finding A) and a damaged file no longer becomes a fresh update (finding B)
+
+Findings A and B of the 0.5.76 review, in one patch.
+
+- **A: an old-format resume file is read without changing its text.** `load_resume_manifest` replaced every `{` and `}` of the text, which also changed braces inside
+  titles, changelogs and other strings. It now gives the text to `_load_legacy_literal` (which reads Python literals and never runs anything, and removes only the
+  `AttrDict(**{...})` wrapper tokens), after the old `'size': 5L,` fix. The default JSON format was not affected.
+- **B: only a missing file means "no resume file".** Before, any `IOError` returned an empty list, and `cmd_update` wrapped the whole resume setup in `except Exception`
+  that set `resumedb = None`: a cut-off, non-text, wrongly built or unreadable resume file, or a wrong-typed `failure_counts`, silently became a fresh update.
+  Now `load_resume_manifest` returns `[]` only for `FileNotFoundError`. A file that cannot be read (permission, folder instead of file, not UTF-8), whose JSON or old-format
+  text is damaged, or that holds no list of games and properties, stops the run: one message that names the file, says it only remembers what an unfinished update
+  still has to fetch, that nothing was changed, to delete it (or copy the `.bak` over it, if there is one), and exit status 1. Nothing is fetched or written first.
+- **The properties record is checked** (new `check_resume_manifest`, called by `cmd_update`): the last entry is a record, every game entry is a record, `failure_counts` is a
+  table of text ids and whole numbers of 0 or more (or absent), `complete` is yes or no and, in a file of the current version, present; a current-version file that is
+  not complete also needs `os_list`, `lang_list` (lists), `installers` (text) and `strict` (yes/no), which resuming reads directly. Each failure gives the same kind
+  of message and stops. A file of another version is left to the question below. `load_resume_manifest` itself checks only the file as a whole, so tests and tools that
+  build partial records still work.
+- **The question about an incompatible resume file no longer relies on `input()` failing.** Without a terminal (`EOFError`, as in a scheduled task) the run stops with a
+  message and exit status 1 instead of silently discarding the file, as the broad `except` used to do. Answering `D` discards, `A` aborts, as before; a complete file of
+  another version is still discarded without asking.
+- **DIFFERENCE: `--resumemode noresume` also stops for a damaged resume file** (it still reads the file for the failure counts, and writes it again later). Delete the file to go
+  on. A resume file that used to be ignored by accident (for example one without `complete`) now stops the run.
+- **Tests:** new `tests/test_resume_loading.py` with 34 tests (braces and `5L` in old-format files, the text is not run as code, a missing file, truncated / garbage / empty /
+  non-list / non-text / unreadable / permission-denied files and the `.bak` hint, every check of the record, `cmd_update` stopping before any request and leaving the file
+  unchanged, `noresume` with a damaged file, resuming a good file in both formats, and the incompatible-version question with `D`, `A`, no terminal and a complete file).
+  The real resume file of the maintainer (JSON, an unfinished update of 77 games with movies on) was run through the new loader and checks once, offline, and passed.
+  `tests/test_update_warning.py` had two tests that simulated "no resume file" by making `load_resume_manifest` raise `IOError`, which only worked because the old broad `except`
+  swallowed it; they now return `[]`, the loader's answer for a missing file (no behaviour change).
+  26 mutations were checked: 24 were caught at once; one survivor was a missing test case (a non-list old-format file); one showed a real gap (a file of the current version
+  without `complete` was not flagged), fixed in the code with a test; the last, a different default for `complete` inside `needresume`, changes nothing after that check.
+
 ## 0.5.85 - 21.11.2026 - `list` keeps the games that have no installer; a resumed update keeps `-movies`
 
 - **`list` no longer hides games that have no installer at all when `-os`, `-skipos`, `-lang` or `-skiplang` is used.** A game with only extras (like
