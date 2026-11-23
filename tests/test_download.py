@@ -93,6 +93,18 @@ class FreshDownloadTests(Checks):
         self.assertEqual(len([m for m in messages(r) if m.startswith('     download   ')]), len(STANDARD_FILES))
 
 
+class OldManifestEntryTests(Checks):
+    """Entry 0.5.88: cmd_download no longer defaults folder_name, galaxyDownloads and sharedDownloads itself; handle_game_renames, which runs first, does."""
+    def test_entries_without_folder_name_galaxy_and_shared_downloads_are_downloaded(self):
+        r = result('old_manifest_entries')
+        for relpath in ('alpha/setup_alpha.exe', 'alpha/setup_alpha-1.bin', 'alpha/setup_alpha_linux.sh', 'alpha/setup_alpha_de.exe', 'alpha/manual.pdf',
+                        'alpha/soundtrack.zip', 'beta/setup_beta.exe', 'beta/extra_beta.exe'):       # no folder_name: the folder is the title
+            self.assertServed(r, relpath)
+        self.assertFalse([f for f in game_files(r) if 'galaxy' in f or 'shared' in f])               # the entries have no such files
+        self.assertEqual(messages(r, 'ERROR'), [])
+        self.assertNotLogged(r, 'AttributeError')
+
+
 class FilterTests(Checks):
     def test_os_and_language_filters(self):
         r = result('filter_os_lang')      # linux only, English only

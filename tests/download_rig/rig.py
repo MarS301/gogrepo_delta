@@ -128,6 +128,13 @@ def standard_world(srv):
 def sc_dryrun_fresh(srv, root):
     w = standard_world(srv); return dict(items=w.items, kwargs=dict(dryrun=True))
 @scenario
+def sc_old_manifest_entries(srv, root):
+    # entries of a manifest from before galaxyDownloads, sharedDownloads and folder_name existed: download must cope (handle_game_renames gives them the defaults)
+    w = standard_world(srv)
+    for item in w.items:
+        for key in ('folder_name', 'galaxyDownloads', 'sharedDownloads'): item.pop(key, None)
+    return dict(items=w.items, kwargs={})
+@scenario
 def sc_fresh_download(srv, root):
     w = standard_world(srv); return dict(items=w.items, kwargs={})
 @scenario
