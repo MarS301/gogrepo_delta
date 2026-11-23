@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.86'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.87'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -377,7 +377,7 @@ def flush_summarised():
         pending = list(_summarised.values())
         _summarised.clear()
     for entry in pending:
-        items = entry['items']
+        items = sorted(entry['items'], key=lambda name: (str(name).lower(), str(name)))       # the worker threads report in any order
         shown = items[:SUMMARY_MAX_ITEMS]
         listing = ', '.join(shown)
         if len(items) > len(shown):
@@ -500,7 +500,6 @@ GOG_MEDIA_TYPE_GAME  = '1'
 GOG_MEDIA_TYPE_MOVIE = '2'
 
 # HTTP request settings
-HTTP_FETCH_DELAY = 1   # in seconds
 HTTP_RETRY_DELAY = SETTING_VALUES['http_retry_delay']   # in seconds #If you reduce this such that the wait between the first and third try is less than 10 seconds, you're gonna have a bad time with the 503 error.
 HTTP_RETRY_COUNT = SETTING_VALUES['http_retry_count']
 HTTP_TIMEOUT = SETTING_VALUES['http_timeout']
@@ -1272,6 +1271,10 @@ def parse_manifest_text(ad, filepath, save_repair=True):
         db = _load_legacy_literal(ad)
     except Exception as e:
         raise ManifestDamaged("%s: %s" % (type(e).__name__, e))
+    if not isinstance(db, list):
+        raise ManifestDamaged("the old-format data is of type %s, not a list of games" % type(db).__name__)
+    if not all(isinstance(game, dict) for game in db):
+        raise ManifestDamaged("the old-format list holds entries that are not games")
     if (mungeDetected and save_repair):
         try:
             save_manifest(db,filepath)
