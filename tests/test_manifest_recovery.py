@@ -163,6 +163,51 @@ class DamagedManifestTests(RecoveryTests):
         items, _ = self.load()
         self.assertEqual(items, self.old_items)
 
+    def test_an_old_format_file_of_the_wrong_type_is_damaged_too(self):
+        # entry 0.5.87: valid data that is not a list of games (a bare number, text, a tuple, entries that are not records) was accepted and failed later
+        for content in ('5', "'a manifest'", "({'id': 1, 'title': 'a'},)", '[1, 2]', "# 2 games\n[{'id': 1, 'title': 'a'}, 'x']", 'None'):
+            with self.subTest(content=content):
+                self.damage_manifest(content)
+                with self.assertLogs('gogrepoc', level='ERROR') as logs:
+                    items, _ = self.load()
+                self.assertIn("The manifest file 'gog-manifest.dat' is damaged", '\n'.join(logs.output))
+                self.assertIn('not', '\n'.join(logs.output))
+                self.assertEqual(items, self.old_items)                      # the backup is offered and used, as for any damaged manifest
+                self.assertEqual(self.text(MANIFEST), self.backup_text)
+
+    def test_the_message_says_what_was_wrong_with_the_old_format_data(self):
+        self.damage_manifest('5')
+        with self.assertLogs('gogrepoc', level='ERROR') as logs:
+            self.load()
+        self.assertIn('the old-format data is of type int, not a list of games', '\n'.join(logs.output))
+        self.damage_manifest('[1, 2]')
+        with self.assertLogs('gogrepoc', level='ERROR') as logs:
+            self.load()
+        self.assertIn('the old-format list holds entries that are not games', '\n'.join(logs.output))
+
+    def test_a_wrong_type_old_format_file_without_a_backup_stops_with_a_clear_message(self):
+        os.remove(BACKUP)
+        self.damage_manifest('5')
+        with self.assertRaises(SystemExit) as raised, self.assertLogs('gogrepoc', level='ERROR') as logs:
+            self.load(answer='n')
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn('is damaged', '\n'.join(logs.output))
+
+    def test_a_wrong_type_old_format_backup_is_not_used(self):
+        self.damage_manifest('main damaged')
+        with open(BACKUP, 'w', encoding='utf-8') as f:
+            f.write('5')
+        with self.assertRaises(SystemExit), self.assertLogs('gogrepoc', level='ERROR'):
+            self.load()
+        self.assertEqual(self.text(BACKUP), '5')                            # nothing was changed
+
+    def test_an_empty_old_format_list_is_an_empty_library_not_damage(self):
+        self.damage_manifest('# 0 games\n[]')
+        with self.assertNoLogs('gogrepoc', level='ERROR') if hasattr(self, 'assertNoLogs') else contextlib.nullcontext():
+            items, asked = self.load()
+        self.assertEqual(items, [])
+        self.assertEqual(asked.call_count, 0)
+
     def test_bytes_that_are_not_utf8_count_as_damaged(self):
         with open(MANIFEST, 'wb') as f:
             f.write(b'{"items": [\xff\xfe\xfd]}')

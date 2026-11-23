@@ -19,17 +19,34 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - Unreachable code is kept as it was: the `AttributeError` defaults for `folder_name`, `galaxyDownloads` and `sharedDownloads` in `cmd_download`
   (`handle_game_renames` sets them first), the `SSLError` branch in `_download_ioloop` (an `SSLError` is a `ConnectionError` and is caught by the
   branch before it) and the `os.makedirs(dest_dir)` in `_prepare_download_file`.
-- `HTTP_FETCH_DELAY` is defined but not used anywhere, so it is not a setting in the config file.
-- In the combined "No MD5 data was available" warning produced while downloading (several worker threads), the order of the file names can
-  differ from run to run. Only the order differs.
 - A language group that contains only a patch counts as "has your language" for that system (edge case, not handled).
-- A legacy-format manifest that holds valid data of the wrong type (a bare number, say) is accepted by the loader and fails later; damaged files
-  are handled (found in the review of entry 30).
 - Reading the legacy manifest format is 3-4 times slower than it was with `eval` (0.7 s for a 1.2 MB file, 12 s for 23 MB); the JSON format, which is
   the default, is not affected.
 - Saving the legacy manifest format still re-formats the whole manifest on every save (the cost grows with the library); it is not the default.
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
+
+## 0.5.87 - 22.11.2026 - three known issues fixed
+
+Three of the known issues, the cheap ones; they are removed from the list above.
+
+- **`HTTP_FETCH_DELAY` is deleted.** It was defined and never used (no code, test, README text or config key referred to it), so it never had an effect and was not a setting
+  in the config file. `HTTP_RETRY_DELAY` and `HTTP_RETRY_COUNT` are the settings that count. Making it a real delay between requests would change the download behaviour; that is
+  not part of this entry.
+- **The file names in the combined "No MD5 data was available" warning are listed in alphabetical order.** The worker threads report them in any order, so the list differed from
+  run to run. `flush_summarised` now sorts the names of every combined warning (this is the only condition that uses it): not case-sensitive (`A.exe`, `a.exe`, `B.exe`), a tie
+  keeps capitals first, otherwise plain text order (`patch_10.exe` comes before `patch_2.exe`). When there are more names than `summary_max_items`, the names shown are the
+  alphabetically first ones, so the same files give the same warning on every run.
+- **An old-format manifest with data of the wrong type is damaged, not accepted.** A manifest in the old format that held valid data that is not a list of games (a bare number,
+  text, a tuple) or a list with entries that are not records was accepted by the loader and failed later. `parse_manifest_text` now raises `ManifestDamaged` ("the old-format data
+  is of type int, not a list of games", "the old-format list holds entries that are not games"), which goes through the existing recovery like any damaged manifest: the damaged
+  file is kept, the backup copy is offered, and without a backup the run stops with the usual message. A backup of the wrong type is not used. An empty old-format list is a valid
+  empty library, as before. The JSON format already checked its structure.
+- **Tests:** `tests/test_summarised_warnings.py`: the test of the cap listed the names in the order they were reported and asserted that `file19.exe` is not shown; with sorted names it
+  is among the first 15, so it now expects the alphabetically first 15 (one test adapted), and 2 more tests (the order, and the same warning in any order). `tests/test_manifest_recovery.py`:
+  5 more (wrong types with the backup, the two messages, no backup, a wrong-type backup, and the empty list that stays valid). 9 mutations of these changes were checked.
+
+DIFFERENCE: the order of the names in a "No MD5 data" warning is now alphabetical; a wrong-type old-format manifest goes to recovery instead of failing later.
 
 ## 0.5.86 - 21.11.2026 - the resume file: braces in old-format files (finding A) and a damaged file no longer becomes a fresh update (finding B)
 

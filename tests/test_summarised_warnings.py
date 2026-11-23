@@ -42,7 +42,29 @@ class Summaries(Base):
         G.note_summarised('no md5 data', 'file0.exe', G.NO_MD5_MESSAGE)                   # second site, same file
         G.flush_summarised()
         (w,) = self.cap.at(logging.WARNING)
-        self.assertIn('20 file(s)', w); self.assertIn('file0.exe', w); self.assertIn('and 5 more', w); self.assertNotIn('file19.exe', w)
+        shown = sorted(['file%d.exe' % n for n in range(20)])[:15]                          # the names are listed alphabetically, so the first 15 are shown
+        self.assertIn('20 file(s)', w); self.assertIn(': ' + ', '.join(shown) + ' ... and 5 more', w)
+        self.assertEqual(len(shown), 15); self.assertNotIn('file5.exe', w)
+
+    def test_names_are_listed_alphabetically_whatever_order_they_were_reported(self):
+        # entry 0.5.87: the worker threads report in any order, so the order of the names differed from run to run
+        for name in ('b.exe', 'C.exe', 'a.exe', 'B.exe', 'A.exe', 'patch_10.exe', 'patch_2.exe'):
+            G.note_summarised('no md5 data', name, G.NO_MD5_MESSAGE)
+        G.flush_summarised()
+        (w,) = self.cap.at(logging.WARNING)
+        self.assertIn(': A.exe, a.exe, B.exe, b.exe, C.exe, patch_10.exe, patch_2.exe.', w)    # not case-sensitive; a tie keeps capitals first; plain text order
+
+    def test_the_same_names_give_the_same_warning_in_any_order(self):
+        names = ['file%02d.exe' % n for n in range(40)]
+        warnings = []
+        for order in (names, names[::-1], names[7:] + names[:7]):
+            for name in order:
+                G.note_summarised('no md5 data', name, G.NO_MD5_MESSAGE)
+            G.flush_summarised()
+            warnings.append(self.cap.at(logging.WARNING)[-1])
+        self.assertEqual(len(self.cap.at(logging.WARNING)), 3)
+        self.assertEqual(warnings[0], warnings[1]); self.assertEqual(warnings[0], warnings[2])
+        self.assertIn('file00.exe', warnings[0]); self.assertIn('and 25 more', warnings[0]); self.assertNotIn('file39.exe', warnings[0])
 
     def test_details_available_at_debug(self):
         G.rootLogger.setLevel(logging.DEBUG)
