@@ -156,9 +156,9 @@ class UpdateStartTests(unittest.TestCase):
                    mock.patch.object(g, 'request', lambda *a, **k: Resp()),
                    mock.patch.object(g, 'save_manifest'), mock.patch.object(g, 'save_resume_manifest')]
         if resume:      # an interrupted update with no games left to fetch; once it is done, the next update is a fresh one
-            patches.append(mock.patch.object(g, 'load_resume_manifest', side_effect=[[resumeprops], IOError('none')]))
+            patches.append(mock.patch.object(g, 'load_resume_manifest', side_effect=[[resumeprops], []]))      # [] is 'no resume file'
         else:
-            patches.append(mock.patch.object(g, 'load_resume_manifest', side_effect=IOError('none')))
+            patches.append(mock.patch.object(g, 'load_resume_manifest', return_value=[]))
         spy = mock.Mock()
         patches.append(mock.patch.object(g, 'warn_if_update_narrows_manifest', spy))
         for p in patches:
