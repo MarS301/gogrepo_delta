@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.87'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.88'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -5858,17 +5858,8 @@ def _clean_work_dir(work_dir, all_items_by_title, dryrun, skip_dir=None):
 
 
 def _item_download_lists(item, skipextras, skipstandalone, skipgalaxy, skipshared, os_list, lang_list,lang_fallback=None):
-    """Return (downloads, galaxyDownloads, sharedDownloads, extras) of a game after applying the skip flags and the os/language filters."""
-    try:
-        _ = item.galaxyDownloads
-    except AttributeError:
-        item.galaxyDownloads = []
-
-    try:
-        a = item.sharedDownloads
-    except AttributeError:
-        item.sharedDownloads = []
-
+    """Return (downloads, galaxyDownloads, sharedDownloads, extras) of a game after applying the skip flags and the os/language filters.
+    The game has been through handle_game_renames (cmd_download does that first), which gives it galaxyDownloads and sharedDownloads."""
     filtered_extras = item.extras
     filtered_downloads = item.downloads
     filtered_galaxyDownloads = item.galaxyDownloads
@@ -6359,8 +6350,6 @@ def _download_ioloop(job, tid, path, response, out):
             watchdog.resume()
     except (requests.exceptions.ConnectionError,requests.packages.urllib3.exceptions.ProtocolError) as e:
         error("server response issue while downloading content for %s" % (path))
-    except (requests.exceptions.SSLError) as e:
-        error("SSL issue while downloading content for %s" % (path))
     except (requests.exceptions.ChunkedEncodingError) as e:
         error("Encoding Error In Chunk for %s" %  (path))
     finally:
@@ -6801,14 +6790,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
     _clean_work_dir(downloadingdir, all_items_by_title, dryrun, skip_dir=PROVISIONAL_DIR_NAME)
     _clean_work_dir(provisionaldir, all_items_by_title, dryrun)
 
-    for item in items:
-        try:
-            _ = item.folder_name
-        except AttributeError:
-            item.folder_name = item.title
-
-
-    # Find all items to be downloaded and push into work queue
+    # Find all items to be downloaded and push into work queue (handle_game_renames above gave every one of them folder_name, galaxyDownloads and sharedDownloads)
     for item in sorted(items, key=lambda g: g.folder_name):
         _process_download_item(job, item, savedir, downloadingdir, provisionaldir, orphandir, all_items,
                                skipextras, skipstandalone, skipgalaxy, skipshared, os_list, lang_list,

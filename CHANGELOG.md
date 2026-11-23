@@ -16,15 +16,41 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 
 ## Known issues (not fixed yet)
 
-- Unreachable code is kept as it was: the `AttributeError` defaults for `folder_name`, `galaxyDownloads` and `sharedDownloads` in `cmd_download`
-  (`handle_game_renames` sets them first), the `SSLError` branch in `_download_ioloop` (an `SSLError` is a `ConnectionError` and is caught by the
-  branch before it) and the `os.makedirs(dest_dir)` in `_prepare_download_file`.
+- **File names from a download address are not checked** (found in entry 0.5.88). The name of a file is the last part of the address GOG's server redirected to, after
+  `unquote()`, so `sub%2Fa.exe` becomes `sub/a.exe` and `..%2F..%2Fx.exe` becomes `../../x.exe`. `_queue_item_downloads` only skips names that are `None`, so such a name
+  would be joined to the game's folder and `_prepare_download_file` would create folders and the file outside the library (checked on the function with a made-up name; a real
+  download needs a server that sends such an address, which GOG does not). Planned hardening: refuse a name that has a path separator or is `.` / `..`, report it as a failed
+  file, and leave everything else as it is. This is also why the `os.makedirs(dest_dir)` in `_prepare_download_file` is not dead code, as an earlier version of this list said.
+- `_clean_work_dir` reads `galaxyDownloads` and `sharedDownloads` of every game in the manifest directly. `handle_game_renames` only gives them to the games that `-ids` / `-skipids`
+  selected, so a manifest entry from before those fields existed, together with a leftover folder for it in `!downloading` or `!provisional`, makes `download -ids ...` stop with an
+  `AttributeError` (checked on the function). Manifests written by `update` always have the fields, so this needs a very old manifest.
 - A language group that contains only a patch counts as "has your language" for that system (edge case, not handled).
 - Reading the legacy manifest format is 3-4 times slower than it was with `eval` (0.7 s for a 1.2 MB file, 12 s for 23 MB); the JSON format, which is
   the default, is not affected.
 - Saving the legacy manifest format still re-formats the whole manifest on every save (the cost grows with the library); it is not the default.
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
+
+## 0.5.88 - 23.11.2026 - dead code removed from the download path (known issue)
+
+The known issue "unreachable code is kept as it was" listed three spots. Each one was checked before anything was removed; two were removed, one was wrong.
+
+- **Removed: the `folder_name` default in `cmd_download`.** `handle_game_renames` runs first on the same list and, at the top of its loop and before any `continue`, gives every game
+  `galaxyDownloads`, `sharedDownloads` and `folder_name` (also in a dry run). The `try ... except AttributeError` loop after it could never run.
+- **Removed: the `galaxyDownloads` and `sharedDownloads` defaults in `_item_download_lists`.** Its only caller is `_process_download_item`, whose only caller is `cmd_download`, after the
+  renames above. The docstring now says what the function relies on.
+- **Removed: the `SSLError` handler in `_download_ioloop`.** `requests.exceptions.SSLError` is a subclass of `ConnectionError` (checked with `issubclass`, requests 2.34.2; it has been
+  one since requests 1.x), and the handler for `ConnectionError` stands first, so the "SSL issue while downloading" message was never printed. An SSL error is reported, as before, as
+  "server response issue while downloading content for ..."; what arrived is kept and the response is closed. `ChunkedEncodingError` is not a `ConnectionError` and keeps its own handler.
+- **NOT removed: `os.makedirs(dest_dir)` in `_prepare_download_file`.** It looked dead because the game's folder is made before, but the final file is `game folder + name`, and a name taken from
+  a download address can hold a separator (see the new known issue). The check also found that such names are not validated at all; that is now a known issue with a planned
+  hardening, not part of this cleanup (it would change what the download refuses).
+- **No change in behaviour.** The download tests (rig and unit) pass as before.
+- **Tests:** new `tests/test_download_preconditions.py` (5 tests: `handle_game_renames` gives the three attributes to every game it is handed, in a dry run too, and not to games that are only in
+  the directory list; the download helper works on that result; `_prepare_download_file` creates the folders, also for a name with a separator, which pins the code that was not removed);
+  `tests/test_download_loop.py`: 2 more (a broken connection of any of the three kinds keeps what arrived, is reported and closes the response; `SSLError` is a `ConnectionError`, the reason for
+  the removal, so a change in requests is noticed); `tests/test_download.py`: 1 more with a new rig scenario `old_manifest_entries` (a manifest without `folder_name`, `galaxyDownloads` and
+  `sharedDownloads` is downloaded into the title folders). 11 mutations of this change were checked and all were caught.
 
 ## 0.5.87 - 22.11.2026 - three known issues fixed
 

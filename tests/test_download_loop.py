@@ -11,8 +11,8 @@ import gogrepo_delta as g
 
 
 class FakeResponse(object):
-    def __init__(self, chunks=(), block_after_chunks=False):
-        self.chunks, self.block_after_chunks = list(chunks), block_after_chunks
+    def __init__(self, chunks=(), block_after_chunks=False, error=None):
+        self.chunks, self.block_after_chunks, self.error = list(chunks), block_after_chunks, error
         self.closed = threading.Event()
         self.chunk_sizes_requested = []
 
@@ -23,6 +23,8 @@ class FakeResponse(object):
         self.chunk_sizes_requested.append(chunk_size)
         for chunk in self.chunks:
             yield chunk
+        if self.error is not None:                       # the connection breaks after the chunks
+            raise self.error
         if self.block_after_chunks:                      # a server that stops sending
             self.closed.wait(10)
             raise requests.exceptions.ConnectionError('closed by the stall watchdog')
@@ -93,6 +95,27 @@ class DownloadLoopTests(unittest.TestCase):
         self.assertEqual(out.getvalue(), b''.join(chunks))
         self.assertEqual(job.sizes['p'], 0)
         self.assertEqual(sum(sz for _, (sz, _) in job.rates['p']), 50000)
+
+    def test_a_broken_connection_keeps_what_arrived_and_is_reported(self):
+        # entry 0.5.88: an SSLError is a ConnectionError, so the first handler takes it (the separate SSLError handler below it could never run, and was removed)
+        for name, error in (('connection', requests.exceptions.ConnectionError('reset')), ('ssl', requests.exceptions.SSLError('bad record mac')),
+                            ('chunked', requests.exceptions.ChunkedEncodingError('cut off'))):
+            with self.subTest(name):
+                out, job = io.BytesIO(), job_for('p', 3000)
+                response = FakeResponse([b'a' * 1000, b'b' * 500], error=error)
+                with self.assertLogs('gogrepoc', level='ERROR') as logs:
+                    written = g._download_ioloop(job, 1, 'p', response, out)
+                self.assertEqual(written, 1500)                              # what arrived is kept and counted
+                self.assertEqual(out.getvalue(), b'a' * 1000 + b'b' * 500)
+                self.assertTrue(response.closed.is_set())                    # the response is closed
+                (message,) = [r.getMessage() for r in logs.records]
+                self.assertIn(' for p', message)
+                self.assertIn('Encoding Error In Chunk' if name == 'chunked' else 'server response issue while downloading content', message)
+
+    def test_ssl_errors_are_connection_errors(self):
+        # the reason the SSLError handler was dead; if requests ever changes this, the loop must get its own handler again
+        self.assertTrue(issubclass(requests.exceptions.SSLError, requests.exceptions.ConnectionError))
+        self.assertFalse(issubclass(requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError))
 
     def test_empty_keep_alive_chunks_are_ignored(self):
         out, job = io.BytesIO(), job_for('p', 3)
