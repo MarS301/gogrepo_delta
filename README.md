@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.90-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.91-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -48,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.90` |
+| **Current version** | `v0.5.91` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort: a CI job tries both and is allowed to fail) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -370,7 +370,7 @@ Useful options:
 - `--skippreallocation`: do not preallocate disk space.
 - `--wait HOURS`: wait before starting.
 
-**Portable file names.** So that a library can be copied between Linux, Windows and macOS, `update` stores every file name in a portable form: a path separator, one of `< > : " | ? *` or a control character becomes `_`, a trailing space or dot is dropped, a Windows device name such as `CON` gets a `_` in front, and a name longer than 251 bytes is shortened to 240 bytes (start, `~`, a short hash, extension). When that changes a name, the manifest entry keeps the original in `name_from_server`. `update` also gives the names already in your manifest this form; the files on disk are renamed by the next `download`, `verify` or `clean`. `download`, `verify`, `backup` and `import` do not use a name that is still not portable (a manifest that `update` has not migrated yet): the file gets a warning line and an entry in the end summary, the run ends with exit status 1, and the rest continues.
+**Portable file names.** So that a library can be copied between Linux, Windows and macOS, `update` stores every file name in a portable form: a path separator, one of `< > : " | ? *` or a control character becomes `_`, a trailing space or dot is dropped, a Windows device name such as `CON` gets a `_` in front, and a name longer than 251 bytes is shortened to 240 bytes (start, `~`, a short hash, extension). When that changes a name, the manifest entry keeps the original in `name_from_server`. `update` also gives the names already in your manifest this form; the files on disk are renamed by the next `download`, `verify` or `clean`. `download`, `verify`, `backup` and `import` do not use a name that is still not portable (a manifest that `update` has not migrated yet): the file gets a warning line and an entry in the end summary, the run ends with exit status 1, and the rest continues. The game folder is made portable the same way, and the MD5 XML tree skips a folder that is not. On Windows without long path support (registry value `LongPathsEnabled` = 1 under `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`), a path of 260 characters or more is refused by the system: `download` prints one combined warning for such files and tries them anyway; a shorter library path or long path support fixes it. `gogrepo_survey_names.py [LIBRARY_PATH]` (read only) shows the longest names of your manifest and how long your library path may be.
 
 ### `verify`
 

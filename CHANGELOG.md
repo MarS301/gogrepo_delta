@@ -16,10 +16,12 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 
 ## Known issues (not fixed yet)
 
-- **Only the file name is made portable, not the rest of the path** (entry 0.5.90). Not checked: the game's folder name (it comes from the title; only a folder *rename* has its own check), the
-  operating system and language folders of the MD5 XML tree (they come from GOG's data, not from the address), the length of the whole path (Windows has a limit of 260 characters, which a name of
-  240 bytes in a deep folder can pass), and names that differ only in Unicode form (macOS stores them in one form, so two such names would be one file there). The duplicate rules at update
-  compare names exactly, so two files whose names differ only in case are two entries in the manifest, and one file on Windows and macOS; the migration of old names does ignore case.
+- **A path over 259 characters is only warned about, and two kinds of rare name clash are not handled** (entry 0.5.91; the survey of a real library of 145+ files found none of them, the longest
+  `GAMEFOLDER\NAME` there was 167 characters). (1) The script cannot shorten a path that is too long for Windows: the folder is GOG's slug and the installer name repeats most of it, so a game with a slug
+  of about 95 characters or more may not fit even in a very short library path. It warns once, tries the download, and a refused write is reported as a failed file as before; the fixes are long path support
+  (`LongPathsEnabled`) or a shorter library path. (2) Names that differ only in Unicode form are not normalized (macOS stores one form, so two such names would be one file there), and the duplicate rules at
+  update compare names exactly, so two files whose names differ only in case are two manifest entries, and one file on Windows and macOS. Neither was seen in a real manifest; the migration of old names does
+  ignore case.
 - `_clean_work_dir` reads `galaxyDownloads` and `sharedDownloads` of every game in the manifest directly. `handle_game_renames` only gives them to the games that `-ids` / `-skipids`
   selected, so a manifest entry from before those fields existed, together with a leftover folder for it in `!downloading` or `!provisional`, makes `download -ids ...` stop with an
   `AttributeError` (checked on the function). Manifests written by `update` always have the fields, so this needs a very old manifest.
@@ -29,6 +31,33 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - Saving the legacy manifest format still re-formats the whole manifest on every save (the cost grows with the library); it is not the default.
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
+
+## 0.5.91 - 24.11.2026 - the rest of the path: game folder, MD5 XML folders, and a warning for paths over 259 characters on Windows
+
+The remaining parts of the known issue "only the file name is made portable". The survey of a real library (`gogrepo_survey_names.py`) found no names that differ only in case or Unicode form and no
+non-ASCII names, so those two stay out; what was left is cheap hardening and the Windows path length.
+
+- **Changed: the folder of a game is made portable where `update` builds it** (`_game_folder_name`): the slug GOG sends, plus the suffix of movies (`-movie`) and of duplicate titles (`_ID`), goes through
+  `portable_file_name` (one warning when that changes it; the title stays the slug). GOG's slugs are letters, digits and `_`, so nothing changes today. A folder that was stored under another name gets
+  the existing rename marker (`old_folder_name`) from the normal update merge, and the next download, verify or clean moves the folder on disk, as for any change of the folder name.
+- **Changed: the MD5 XML tree checks its three folders** (game folder, operating system, language) in `save_manifest`: an unsafe one is skipped and collected into one combined warning. A test checks that
+  every language and operating system name of the script's own tables is portable.
+- **New: warning for a path over 259 characters on Windows without long path support.** Windows refuses a path of 260 characters or more (the last one is the terminating NUL). When a file is about to be
+  downloaded, the longest of its three places (`LIBRARY\GAME\NAME`, `LIBRARY\!downloading\GAME\NAME`, `LIBRARY\!downloading\!provisional\GAME\NAME`) is measured; over 259 characters the file is added to one
+  combined warning that names the count, the files and the two fixes (registry value `LongPathsEnabled` = 1, or a shorter library path). **Warn only: the download is tried anyway** and no failure is counted, because
+  the system's answer is better than a guess; if it refuses, the file is reported as failed as before. `_windows_path_limit_in_effect` is true only on Windows and only when `LongPathsEnabled` is not 1 (also
+  when the value cannot be read); on Linux and macOS nothing is measured. A file that is already up to date is not mentioned.
+- **New: `gogrepo_survey_names.py`, a separate file next to the script.** A read-only survey of the manifest: names that differ only in case or Unicode form, non-ASCII names, the longest `GAMEFOLDER\NAME`, the longest library
+  path that still fits, and with the library path as argument the files that would be over 259 characters.
+- **Fixed on the way: three test problems of 0.5.90 on Windows, none in the script.** (1) NTFS does not refuse `setup:2.exe`; it writes the stream `2.exe` of a file `setup`, so the test's check for a file
+  system without colons never skipped. A helper (`create_file_named`) now checks that the name exists as given, with tests for it that simulate NTFS. (2) `os.path.join(folder, 'a:b.exe')` is `a:b.exe` on
+  Windows: a name whose second character is a colon is taken for a drive and the folder is thrown away, so the test of a refused name tried to create a folder `a:`. (3) A test that a MD5 XML file was *not*
+  written joined its path the same way, so it could never fail on Windows. `path_in(folder, name)` (folder, separator, name) now builds such paths in the tests. The same join behaviour is one more reason why
+  a `:` in a name is refused before any path is built from it: on Windows `c:evil.exe` would be written to the current folder of drive C.
+- **DIFFERENCE: on Windows without long path support, `download` may now print one warning about long paths.** Nothing else changes: no file is refused or renamed because of its path length.
+- **Tests:** new `tests/test_portable_paths.py` (18 tests: the folder helper, `update` with unsafe and duplicate slugs and with a folder stored under another name, the three MD5 XML folders, the path limit
+  with the boundary of exactly 259 and 260 characters, the combined warning, the three places, an up-to-date file, and the detection with a simulated registry including a missing `winreg` and an unreadable value).
+  21 mutations of this change were checked and all were caught (one was first missed, a registry value other than 0 or 1, and got a test).
 
 ## 0.5.90 - 24.11.2026 - portable file names: made portable where update stores them, old manifests migrated, every place that uses a name guarded
 

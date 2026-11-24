@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.90'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.91'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -1563,6 +1563,8 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                 _ = item.folder_name
             except Exception:
                 item.folder_name = item.title
+            if not _md5_xml_folder_ok(item.folder_name):
+                continue
             info("Handling MD5 XML info for " + item.folder_name)
             fname = os.path.join(MD5_DIR_NAME,item.folder_name)
             if not os.path.isdir(fname):
@@ -1572,6 +1574,8 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                 # no safe destination for this XML, and joining None into a path
                 # would fail; leave existing MD5 data untouched instead.
                 if not download.os_type or not download.lang:
+                    continue
+                if not (_md5_xml_folder_ok(download.os_type) and _md5_xml_folder_ok(download.lang)):
                     continue
                 ffdir = os.path.join(fname,"downloads",download.os_type,download.lang)
                 if not os.path.isdir(ffdir):
@@ -5121,7 +5125,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                     item = AttrDict()
                     item.id = item_json_data['id']
                     item.title = item_json_data['slug']
-                    item.folder_name = item_json_data['slug'] + (MOVIE_FOLDER_SUFFIX if media_type == GOG_MEDIA_TYPE_MOVIE else '')
+                    item.folder_name = _game_folder_name(item_json_data['slug'], MOVIE_FOLDER_SUFFIX if media_type == GOG_MEDIA_TYPE_MOVIE else '')
                     item.long_title = item_json_data['title']
 
                     item.genre = item_json_data['category']
@@ -5436,7 +5440,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 global_dupes.extend(dupes)
 
     for dupe in global_dupes:
-        dupe.folder_name = dupe.title + "_" + str(dupe.id)
+        dupe.folder_name = _game_folder_name(dupe.title, "_" + str(dupe.id))
     #Store stuff in the DB in alphabetical order
     sorted_gamesdb =  sorted(gamesdb, key = lambda game : game.title)
     # save the manifest to disk
@@ -5896,6 +5900,45 @@ def _md5_xml_name_ok(name):
         return True
     note_summarised('md5 xml unsafe name', name, UNSAFE_XML_NAME_MESSAGE)
     return False
+
+
+UNSAFE_XML_FOLDER_MESSAGE = ("The MD5 XML data of {count} folder(s) was not saved because the folder name is not portable (the game folder, or the operating system or language folder): {items}.")
+
+
+def _md5_xml_folder_ok(folder_name):
+    """True if this name can be a folder of the MD5 XML tree (game folder, operating system, language); otherwise it is collected for one combined warning."""
+    if unsafe_file_name_reason(folder_name) is None:
+        return True
+    note_summarised('md5 xml unsafe folder', folder_name, UNSAFE_XML_FOLDER_MESSAGE)
+    return False
+
+
+def _game_folder_name(slug, suffix=''):
+    """The folder of a game in the library: the slug GOG sends (letters, digits and '_' in practice) plus the suffix for movies and duplicate titles, made portable the way a file name is.
+    A folder that was named otherwise before is renamed by the existing rename handling (old_folder_name), as for any other change of the folder name."""
+    wanted = slug + suffix
+    folder = portable_file_name(wanted)
+    if folder != wanted:
+        warn('game folder name "%s" is not portable, stored as "%s"' % (_printable_name(wanted), folder))
+    return folder
+
+
+# Windows refuses a path of 260 characters or more (MAX_PATH, the last one is the terminating NUL) unless long path support is switched on.
+WINDOWS_PATH_LIMIT = 259
+LONG_PATH_MESSAGE = ("{count} file(s) need a path longer than %d characters. Windows refuses to write such a path unless long path support is on (registry value LongPathsEnabled = 1 under "
+                     "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem) or the library folder has a shorter path. The download is tried anyway: {items}." % WINDOWS_PATH_LIMIT)
+
+
+def _windows_path_limit_in_effect():
+    """True on Windows when long path support is not switched on (or cannot be read), so that a path over WINDOWS_PATH_LIMIT characters would be refused; False everywhere else."""
+    if sys.platform != 'win32':
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\FileSystem') as key:
+            return winreg.QueryValueEx(key, 'LongPathsEnabled')[0] != 1
+    except (ImportError, OSError):
+        return True
 
 
 def _display_name(path):
@@ -6414,6 +6457,11 @@ def _queue_item_downloads(job, item, game_items, item_homedir, item_downloaddir,
             run_report.count('files skipped (download limit)')
             continue
 
+
+        if _windows_path_limit_in_effect():
+            longest = max(len(os.path.abspath(path)) for path in (dest_file, downloading_file, provisional_file))
+            if longest > WINDOWS_PATH_LIMIT:
+                note_summarised('path too long', '%s/%s' % (os.path.basename(item_homedir), game_item.name), LONG_PATH_MESSAGE)
 
         info('     download   %s' % game_item.name)
         job.sizes[dest_file] = game_item.size

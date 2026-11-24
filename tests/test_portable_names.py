@@ -17,7 +17,7 @@ from unittest import mock
 import _bootstrap  # noqa: F401
 import gogrepo_delta as g
 import test_run_summary as trs
-from test_file_name_safety import create_file_named
+from test_file_name_safety import create_file_named, path_in
 
 
 class Capture(logging.Handler):
@@ -223,7 +223,7 @@ class UpdateMigrationTests(trs.TempDirTests):
 
     def test_the_next_rename_run_moves_the_file_on_disk(self):
         self.library({'setup:2.exe': b'a' * 50})
-        if not create_file_named(os.path.join(self.dir, 'alpha', 'setup:2.exe'), b'a' * 50):
+        if not create_file_named(path_in(os.path.join(self.dir, 'alpha'), 'setup:2.exe'), b'a' * 50):
             self.skipTest('this file system does not keep a colon in a file name (NTFS makes it a stream of the file "setup")')
         self.update()
         items = g.load_manifest()
@@ -322,7 +322,7 @@ class RefusalEverywhereTests(trs.TempDirTests):
         self.assertTrue(os.path.isfile(os.path.join(folder, 'English', 'good.exe.xml')))
         self.assertTrue(os.path.isfile(os.path.join(root, 'extras', 'manual.pdf.xml')))
         self.assertEqual(sorted(glob.glob(os.path.join(g.MD5_DIR_NAME, '**', '*evil*'), recursive=True)), [])      # nowhere in the MD5 folder, also not one folder up
-        self.assertFalse(os.path.exists(os.path.join(folder, 'English', 'a:b.exe.xml')))
+        self.assertFalse(os.path.exists(path_in(os.path.join(folder, 'English'), 'a:b.exe.xml')))
         g.flush_summarised()
         notes = [m for m in self.handler.warnings() if 'MD5 XML data of 3 file(s) was not saved' in m]
         self.assertEqual(len(notes), 1, self.handler.warnings())

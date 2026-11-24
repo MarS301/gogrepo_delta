@@ -69,6 +69,11 @@ class UnsafeNameReasonTests(unittest.TestCase):
         self.assertEqual(g.unsafe_file_name_reason('a:b:c?.exe'), 'the name contains a character that is not allowed in file names: : ?')
 
 
+def path_in(folder, name):
+    """folder + separator + name, for a name that os.path.join would misread: on Windows a name whose second character is a colon ('a:b.exe') is taken for a drive and join() throws the folder away."""
+    return folder + os.sep + name
+
+
 def create_file_named(path, data=b'x'):
     """Create the file at path and return True, or return False (leaving nothing behind) when this file system does not keep the name as it is given.
     A colon is no error on every system: on NTFS, 'setup:2.exe' is the stream '2.exe' of a file 'setup', so open() succeeds and the folder holds 'setup'."""
@@ -114,12 +119,16 @@ class CreateFileNamedTests(unittest.TestCase):
             return real_open(os.path.join(folder, name.split(':')[0]), mode, *args, **kwargs)
 
         with mock.patch('builtins.open', ntfs_open):
-            self.assertFalse(create_file_named(os.path.join(self.dir, 'setup:2.exe')))
+            self.assertFalse(create_file_named(path_in(self.dir, 'setup:2.exe')))
         self.assertEqual(os.listdir(self.dir), [])
+
+    def test_path_in_keeps_the_folder_for_a_name_with_a_colon_as_its_second_character(self):
+        path = path_in(self.dir, 'a:b.exe')
+        self.assertEqual(os.path.split(path), (self.dir, 'a:b.exe'))        # os.path.join(self.dir, 'a:b.exe') is 'a:b.exe' on Windows
 
     def test_a_refused_name_gives_false(self):
         with mock.patch('builtins.open', side_effect=OSError('invalid name')):
-            self.assertFalse(create_file_named(os.path.join(self.dir, 'a:b.exe')))
+            self.assertFalse(create_file_named(path_in(self.dir, 'a:b.exe')))
 
 
 class QueueTests(unittest.TestCase):
@@ -172,7 +181,7 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(g.run_report.failures, [])
 
     def test_a_file_that_is_already_in_the_library_is_refused_too_and_left_alone(self):
-        path = os.path.join(self.home, 'setup:2.exe')
+        path = path_in(self.home, 'setup:2.exe')
         if not create_file_named(path, b'x' * 100):
             self.skipTest('this file system does not keep a colon in a file name')
         job = self.queue(['setup:2.exe'])
