@@ -16,11 +16,10 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 
 ## Known issues (not fixed yet)
 
-- **File names from a download address are not checked** (found in entry 0.5.88). The name of a file is the last part of the address GOG's server redirected to, after
-  `unquote()`, so `sub%2Fa.exe` becomes `sub/a.exe` and `..%2F..%2Fx.exe` becomes `../../x.exe`. `_queue_item_downloads` only skips names that are `None`, so such a name
-  would be joined to the game's folder and `_prepare_download_file` would create folders and the file outside the library (checked on the function with a made-up name; a real
-  download needs a server that sends such an address, which GOG does not). Planned hardening: refuse a name that has a path separator or is `.` / `..`, report it as a failed
-  file, and leave everything else as it is. This is also why the `os.makedirs(dest_dir)` in `_prepare_download_file` is not dead code, as an earlier version of this list said.
+- **Only the file name is made portable, not the rest of the path** (entry 0.5.90). Not checked: the game's folder name (it comes from the title; only a folder *rename* has its own check), the
+  operating system and language folders of the MD5 XML tree (they come from GOG's data, not from the address), the length of the whole path (Windows has a limit of 260 characters, which a name of
+  240 bytes in a deep folder can pass), and names that differ only in Unicode form (macOS stores them in one form, so two such names would be one file there). The duplicate rules at update
+  compare names exactly, so two files whose names differ only in case are two entries in the manifest, and one file on Windows and macOS; the migration of old names does ignore case.
 - `_clean_work_dir` reads `galaxyDownloads` and `sharedDownloads` of every game in the manifest directly. `handle_game_renames` only gives them to the games that `-ids` / `-skipids`
   selected, so a manifest entry from before those fields existed, together with a leftover folder for it in `!downloading` or `!provisional`, makes `download -ids ...` stop with an
   `AttributeError` (checked on the function). Manifests written by `update` always have the fields, so this needs a very old manifest.
@@ -30,6 +29,67 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - Saving the legacy manifest format still re-formats the whole manifest on every save (the cost grows with the library); it is not the default.
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
+
+## 0.5.90 - 24.11.2026 - portable file names: made portable where update stores them, old manifests migrated, every place that uses a name guarded
+
+The second half of the known issue "file names from a download address are not checked", and the rename that entry 0.5.89 left out. Until now a name that Linux, Windows and macOS do not all accept was
+only refused when the file was queued for download. Now `update` stores a portable name in the manifest, so every command sees the same name as the disk, a manifest from before is migrated by `update`,
+and every place in the script that joins a manifest name to a folder checks the name.
+
+- **New: `portable_file_name(name)`.** Every character that `unsafe_file_name_reason` refuses becomes `_` (a path separator too: `../../x.exe` becomes `.._.._x.exe`); a trailing space or dot is dropped;
+  a name that is empty or only dots becomes `_`; a Windows device name gets a `_` in front (`CON.txt` becomes `_CON.txt`); a name that is longer than 251 bytes is shortened to 240 bytes. A name that is
+  fine is returned as it is, and the result is always fine, so a second run changes nothing (a test checks 20,000 random names for both).
+- **New: shortening.** The start of the name, `~`, 8 characters of the SHA-1 of the whole name and the extension (kept when it is 16 bytes or less): two long names that start alike stay different, the same
+  name always gives the same result, and a character is never cut in the middle. The limits are bytes of UTF-8, which fit ext4 (bytes), APFS (characters) and NTFS (UTF-16 units); 251 leaves room for the
+  `.xml` of a MD5 XML file and 240 for the `(1)` of the duplicate rules.
+- **Changed: `fetch_file_info` stores the portable name.** This is where `update` takes the name from the address. When it differs from what the server sent, the manifest entry also gets the field
+  `name_from_server` with the original (only then; an entry whose name is fine has no such field, and a field that is no longer true is removed), and one warning says what was stored instead.
+- **New: `migrate_unsafe_file_names`, run by every `update` right after the manifest is loaded.** Every file (installers, Galaxy, shared, extras) whose stored name is not portable gets the portable name; its old
+  name goes into `old_name` (unless a rename is already waiting there, which keeps the older source) and into `name_from_server`. A new name that another file of the game has already (case ignored) gets
+  `(1)`, `(2)`, ... by the duplicate rules. No network and no file is touched: the files on disk are renamed by the rename handling that `download`, `verify` and `clean` already run first, with its checks
+  for a destination that is already right. The manifest is saved at once (an update that finds nothing new would not save it otherwise), one line per file says what was renamed, and the summary counts
+  `file names made portable`. A second run finds nothing.
+- **Changed: every place that joins a manifest name to a folder refuses a name that is not portable**, with one warning and one entry in the run summary (`GAME/NAME`, "refused, reason"), then goes on with
+  the next file. The warning now ends with "run update to give it a portable name". The places: download (since 0.5.89), `verify`, `backup`, `import`, the MD5 XML files written by `save_manifest`
+  (collected into one warning, as no entry is wanted for each of the many saves), and the rename handling (a *new* name that is not portable is refused; an *old* name that is not a file of the game's folder,
+  that is empty, `.`, `..` or with a separator, cannot be moved, so the marker is dropped with a warning, but not in a dry run). The old name of a rename may still hold `:` and the like: that is the
+  file that has to be moved. `clean` and the orphan code only compare names with the file listing of a folder and join nothing, so they needed no change.
+- **Fixed on the way: the lookup of the other parts of a split ZIP (`x.zip.001`, `.002`) did not escape the name for `glob`.** A name with `[` could not find its parts (`?` and `*` cannot be in a name any more).
+- **DIFFERENCE: `update` stores another name than the server sent when that name is not portable**, and migrates the names already in the manifest. Nothing on disk changes until the next `download`, `verify` or `clean`.
+- **DIFFERENCE: a name over 251 bytes is refused (download, verify, backup, import) and shortened by update.** Before, only the file system refused it, when the file was written.
+- **DIFFERENCE: `verify`, `backup`, `import` and the rename handling report and skip a name that is not portable**, and the run ends with exit status 1; they trusted the name before. A manifest that `update` has
+  migrated has no such names, so this only shows for a manifest that was not updated yet.
+- **DIFFERENCE: the manifest can hold the new field `name_from_server`.** Older versions of the script keep it and ignore it.
+- **Not changed:** what a refused name does in `download` (0.5.89). Not covered, now listed in the known issues: the rest of the path (folder names, total path length, Unicode forms).
+- **Tests:** new `tests/test_portable_names.py` (32 tests: the cases of the rule, 20,000 random names, the limits and the shortening, the numbering of clashes, the migration (all four lists, old entries without
+  lists, clashes with case, a waiting rename, a second run, entries without a name), `fetch_file_info` with a made-up redirect, `update` end to end with a manifest from before (names, saved at once, summary count,
+  and the file renamed on disk by the next rename run), and `verify`, `backup`, `import`, the rename handling, the MD5 XML files and the ZIP lookup with `../evil.exe` and `a:b.exe` entries, each checked for
+  files that must not appear outside the game folder). 40 mutations of this change were checked and all were caught (two were first missed, an early save in `update` and the case rule in the numbering, and
+  got tests).
+
+## 0.5.89 - 24.11.2026 - file names are checked when a download is queued (known issue)
+
+The first half of the known issue "file names from a download address are not checked". A file name is the last part of the address GOG's server redirected to, after `unquote()`,
+so `..%2F..%2Fx.exe` arrives as `../../x.exe`. `_queue_item_downloads` joined it to the game's folder as it was. Now a name is checked first, and a file whose name is refused is not
+downloaded. GOG does not send such addresses today; the check is for a server (or a changed address) that does.
+
+- **New: `unsafe_file_name_reason(name)`.** Returns `None` for a name that can be a file name on Linux, Windows and macOS alike, otherwise a short reason. The goal is a library that can be copied
+  between the three systems, so a name is refused if any one of them would refuse it: empty, `.` and `..`; a `/` or `\`; any of `< > : " | ? *`; a control character (0-31 and DEL); a trailing
+  space or dot (Windows drops it, so the file would get another name); a Windows device name, with or without an extension and in any case (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+  `LPT1`-`LPT9`, also with the superscript digits 1-3, `CONIN$`, `CONOUT$`: `con.txt` and `NUL.tar.gz` count). Not refused: anything else, including spaces inside or at the start of
+  a name, parentheses (`the.art.of.playing.(2014).1080p.mp4`), non-ASCII letters and a name that is longer than 255 bytes (a file system refuses that one when the file is written).
+- **New: refused files are reported and skipped, the rest goes on.** `_queue_item_downloads` checks the name after the `-skipfiles` test (a file that is skipped on purpose is not reported) and before
+  any path is built from it. A refused file gets one warning (`     refused    NAME (reason)`) and one entry in the run summary (`GAMEFOLDER/NAME`, "refused, reason"), so the run ends with
+  exit status 1; the other files of the game and the other games download as usual. Control characters in a name are shown as `\xNN` in both.
+- **DIFFERENCE: an unsafe name that is already in the library is now also reported.** The check runs for every file that would be looked at, also one that is already downloaded and up to date. On Linux
+  and macOS a file such as `setup:2.exe` can exist; it is left alone, but it is reported as refused from now on and the run ends with status 1. Nothing is renamed or deleted.
+- **NOT changed (known issue, narrowed):** the other places that join a manifest name to a folder (`save_manifest` for the MD5 XML files, `handle_game_renames`, `verify`, `backup`, `clean`) do not check
+  it. Renaming a refused file on the fly (for example `:` to `_`) was considered and not done: the manifest name is what `verify`, `clean`, `backup` and the up-to-date test compare with the file on disk,
+  so a file saved under another name would look missing and be downloaded again, and two names could become the same name. It needs the name to be changed where `update` stores it, which is a separate change.
+- **Tests:** new `tests/test_file_name_safety.py` (15 tests: safe names, every character of the set and every control character at the start, middle and end of a name, trailing space and dot, device names,
+  escaped display, and `_queue_item_downloads` with a refused name: one warning and one failure each, the good files queued, nothing created outside the game folder, `-skipfiles` not reported, a refused file that is already in the library is reported and left alone);
+  `tests/test_download.py`: 2 more with a new rig scenario `unsafe_file_names` (five bad names in two groups of one game: the server is never asked for them, the folder tree equals the plain fresh download,
+  one warning and one summary entry each). 16 mutations of this change were checked and all were caught.
 
 ## 0.5.88 - 23.11.2026 - dead code removed from the download path (known issue)
 
