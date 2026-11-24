@@ -17,6 +17,7 @@ from unittest import mock
 import _bootstrap  # noqa: F401
 import gogrepo_delta as g
 import test_run_summary as trs
+from test_file_name_safety import create_file_named
 
 
 class Capture(logging.Handler):
@@ -222,10 +223,8 @@ class UpdateMigrationTests(trs.TempDirTests):
 
     def test_the_next_rename_run_moves_the_file_on_disk(self):
         self.library({'setup:2.exe': b'a' * 50})
-        try:
-            self.write(self.dir, 'setup:2.exe', b'a' * 50)
-        except OSError:
-            self.skipTest('this file system does not allow a colon in a file name')
+        if not create_file_named(os.path.join(self.dir, 'alpha', 'setup:2.exe'), b'a' * 50):
+            self.skipTest('this file system does not keep a colon in a file name (NTFS makes it a stream of the file "setup")')
         self.update()
         items = g.load_manifest()
         g._handle_game_renames_and_save(self.dir, items, False)
