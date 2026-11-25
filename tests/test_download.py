@@ -105,6 +105,28 @@ class OldManifestEntryTests(Checks):
         self.assertNotLogged(r, 'AttributeError')
 
 
+class UnsafeFileNameTests(Checks):
+    """Entry 0.5.89: a file name that is not usable on Linux, Windows and macOS is refused at queue time; the rest is downloaded."""
+    BAD = ['../evil.exe', 'sub/inner.exe', 'setup:2.exe', 'CON.txt', 'what?.pdf']
+
+    def test_the_good_files_are_downloaded_and_nothing_is_written_for_the_bad_ones(self):
+        r = result('unsafe_file_names')
+        for relpath in STANDARD_FILES:
+            self.assertServed(r, relpath)
+        self.assertEqual(sorted(game_files(r)), sorted(game_files(result('fresh_download'))))      # exactly what the same library without the bad entries gives: nothing more in the folders or outside them
+        self.assertEqual([k for k in r['hits'] if k[1].startswith('alpha__evil')], [])      # the server was not even asked for them
+
+    def test_one_warning_per_refused_file_and_one_entry_each_in_the_summary(self):
+        r = result('unsafe_file_names')
+        refused = [m for m in messages(r, 'WARNING') if 'refused' in m]
+        self.assertEqual(len(refused), len(self.BAD), refused)
+        for name in self.BAD:
+            self.assertEqual(len([m for m in refused if name in m]), 1, name)
+        failed = sorted(what for what, why in r['report']['failures'])
+        self.assertEqual(failed, sorted('alpha/' + name for name in self.BAD))
+        self.assertTrue(all(why.startswith('refused, ') for what, why in r['report']['failures']))
+
+
 class FilterTests(Checks):
     def test_os_and_language_filters(self):
         r = result('filter_os_lang')      # linux only, English only

@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.88'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.91'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -1036,7 +1036,7 @@ def renew_token(session,retries=HTTP_RETRY_COUNT,delay=None):
 def _multi_zip_parts(item_name, item_file):
     """Names (no folder) of the files next to item_file that share the base name of item_name, like 'x.zip.001', 'x.zip.002'.
     Refactoring: replaces glob.glob(..., root_dir=...), which exists only from Python 3.10 (TypeError on 3.8 / 3.9)."""
-    pattern = os.path.join(glob.escape(os.path.dirname(item_file)), os.path.splitext(item_name)[0] + ".*")
+    pattern = os.path.join(glob.escape(os.path.dirname(item_file)), glob.escape(os.path.splitext(item_name)[0]) + ".*")
     return [os.path.basename(found) for found in glob.glob(pattern)]
 
 def get_fs_type(path,isWindows=False):
@@ -1563,6 +1563,8 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                 _ = item.folder_name
             except Exception:
                 item.folder_name = item.title
+            if not _md5_xml_folder_ok(item.folder_name):
+                continue
             info("Handling MD5 XML info for " + item.folder_name)
             fname = os.path.join(MD5_DIR_NAME,item.folder_name)
             if not os.path.isdir(fname):
@@ -1572,6 +1574,8 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                 # no safe destination for this XML, and joining None into a path
                 # would fail; leave existing MD5 data untouched instead.
                 if not download.os_type or not download.lang:
+                    continue
+                if not (_md5_xml_folder_ok(download.os_type) and _md5_xml_folder_ok(download.lang)):
                     continue
                 ffdir = os.path.join(fname,"downloads",download.os_type,download.lang)
                 if not os.path.isdir(ffdir):
@@ -1585,7 +1589,7 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                                 warn("It should not be possible to have XML Data without a filename but with a provisional name but since you do, the provisional name of item was: " +  download.provisional_name + " from " + download.manualUrl)
                     except AttributeError:
                         pass
-                if (download.name is not None):
+                if (download.name is not None and _md5_xml_name_ok(download.name)):
                     ffname = os.path.join(ffdir,download.name + ".xml")
                     #rffname = os.path.join(".",ffname)
                     try:
@@ -1611,7 +1615,7 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                                 warn("It should not be possible to have XML Data without a filename but with a provisional name but since you do, the provisional name of item was: " +  extra.provisional_name + " from " + extra.manualUrl)
                     except AttributeError:
                         pass
-                if (extra.name is not None):
+                if (extra.name is not None and _md5_xml_name_ok(extra.name)):
                     ffname = os.path.join(ffdir,extra.name + ".xml")
                     #rffname = os.path.join(".",ffname)
                     try:
@@ -2174,6 +2178,17 @@ def handle_game_renames(savedir, gamesdb, dryrun, directory_gamesdb=None):
                 item.old_name = None
             if item.old_name is None or not getattr(item, 'name', None) or item.old_name == item.name:
                 continue
+            if path_escape_reason(item.old_name):
+                # the old name is not a file of this folder, so there is nothing to move: forget the marker
+                warn('    -> ignoring the rename from "{}": it is not the name of a file in the game folder'.format(_printable_name(item.old_name)))
+                if not dryrun:
+                    item.old_name = None
+                    have_renamed = True
+                continue
+            unsafe = unsafe_file_name_reason(item.name)
+            if unsafe:
+                _report_refused_name(game.folder_name, item.name, unsafe)
+                continue
             src_file = os.path.join(game_dir, item.old_name)
             dst_file = os.path.join(game_dir, item.name)
             pending.append((item, src_file, dst_file))
@@ -2630,7 +2645,13 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=
         d.gog_data.original_headers[key] = response.headers[key]
     for key in d.gog_data.original_headers:
         d.gog_data.headers[key.lower()] = d.gog_data.original_headers[key]
-    d.name = unquote(urlparse(response.url).path.split('/')[-1])
+    server_name = unquote(urlparse(response.url).path.split('/')[-1])
+    d.name = portable_file_name(server_name)
+    if d.name != server_name:
+        d.name_from_server = server_name          # only when it differs from the stored name
+        warn('file name "%s" is not portable, stored as "%s"' % (_printable_name(server_name), d.name))
+    else:
+        d.pop('name_from_server', None)
     d.size = int(d.gog_data.headers['content-length'])
 
 
@@ -4931,6 +4952,11 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
 
 
     gamesdb = load_manifest()
+    migrated_names = migrate_unsafe_file_names(gamesdb)
+    if migrated_names:
+        info('%d file name(s) in the manifest were not portable and got a portable name; the files are renamed by the next download, verify or clean' % migrated_names)
+        run_report.count('file names made portable', migrated_names)
+        save_manifest(gamesdb)
     save_partial = partial
     save_skipknown = skipknown
     save_updateonly = updateonly
@@ -5099,7 +5125,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                     item = AttrDict()
                     item.id = item_json_data['id']
                     item.title = item_json_data['slug']
-                    item.folder_name = item_json_data['slug'] + (MOVIE_FOLDER_SUFFIX if media_type == GOG_MEDIA_TYPE_MOVIE else '')
+                    item.folder_name = _game_folder_name(item_json_data['slug'], MOVIE_FOLDER_SUFFIX if media_type == GOG_MEDIA_TYPE_MOVIE else '')
                     item.long_title = item_json_data['title']
 
                     item.genre = item_json_data['category']
@@ -5414,7 +5440,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 global_dupes.extend(dupes)
 
     for dupe in global_dupes:
-        dupe.folder_name = dupe.title + "_" + str(dupe.id)
+        dupe.folder_name = _game_folder_name(dupe.title, "_" + str(dupe.id))
     #Store stuff in the DB in alphabetical order
     sorted_gamesdb =  sorted(gamesdb, key = lambda game : game.title)
     # save the manifest to disk
@@ -5682,6 +5708,10 @@ def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipga
                 info('found match(es) for file %s with size [%s] and MD5 [%s]' % (fname,s, h))
                 items = md5_info[h]
                 for (folder_name,file_name) in items:
+                    unsafe = unsafe_file_name_reason(file_name)
+                    if unsafe:
+                        _report_refused_name(folder_name, file_name, unsafe)
+                        continue
                     game_dest_dir = os.path.join(dest_dir, folder_name)
                     dest_file = os.path.join(game_dest_dir, file_name)
                     info('match! %s' % (dest_file))
@@ -5740,6 +5770,176 @@ def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipga
 #                             (-> _download_ioloop), _report_progress
 #   finishing                 _finish_provisional_downloads, _remove_empty_subdirs
 # ---------------------------------------------------------------------------------------------
+
+# Characters no file name may contain on at least one of Linux, Windows and macOS (Linux: "/" and NUL; Windows: < > : " / \\ | ? * and the control characters;
+# macOS: ":" and "/"). The goal is a library that can be copied between the three systems, so a name with any of them is refused everywhere.
+UNSAFE_NAME_CHARS = '<>:"/\\|?*'
+# Windows treats these as devices, with or without an extension ("con.txt", "NUL.tar.gz"); COM and LPT also with the superscript digits 1, 2, 3.
+WINDOWS_DEVICE_NAMES = frozenset(['CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'] +
+                                 ['%s%s' % (device, digit) for device in ('COM', 'LPT') for digit in '123456789\u00b9\u00b2\u00b3'])
+# A file system takes 255 bytes for a name (ext4 counts bytes, APFS characters, NTFS UTF-16 units; 255 bytes of UTF-8 fit all three) and '.xml' is added to the name of a
+# MD5 XML file, so a longer name than 251 bytes is refused. A name that is made shorter gets 240 bytes: room for the "(1)" that the duplicate rules add.
+MAX_FILE_NAME_BYTES = 251
+SHORTEN_FILE_NAME_TO = 240
+
+
+def _name_bytes(name):
+    return len(name.encode('utf-8', 'replace'))
+
+
+def _printable_name(name):
+    """The name for a message: control characters shown as \\xNN so that they cannot garble the console or the log."""
+    return ''.join(c if (ord(c) >= 32 and ord(c) != 127) else '\\x%02x' % ord(c) for c in name)
+
+
+def path_escape_reason(name):
+    """None if name is one file name inside a folder (it may still be a bad file name); otherwise why it is not: empty, '.', '..' or with a path separator."""
+    if name in ('', '.', '..'):
+        return "the name is '%s'" % name
+    if '/' in name or '\\' in name:
+        return 'the name contains a path separator'
+    return None
+
+
+def unsafe_file_name_reason(name):
+    """None if name can be used as the name of one file on Linux, Windows and macOS alike; otherwise a short text that says why not.
+    A file name comes from the download address the server sent (unquote() turns '%2F' into '/'), so it is checked before it is joined to a folder."""
+    reason = path_escape_reason(name)
+    if reason:
+        return reason
+    bad = sorted(set(c for c in name if c in UNSAFE_NAME_CHARS or ord(c) < 32 or ord(c) == 127))
+    if bad:
+        return 'the name contains a character that is not allowed in file names: %s' % ' '.join(_printable_name(c) for c in bad)
+    if name[-1] in ' .':
+        return 'the name ends with a space or a dot (Windows drops it)'
+    if name.split('.')[0].rstrip(' ').upper() in WINDOWS_DEVICE_NAMES:
+        return 'the name is a reserved device name on Windows'
+    if _name_bytes(name) > MAX_FILE_NAME_BYTES:
+        return 'the name is longer than %d bytes' % MAX_FILE_NAME_BYTES
+    return None
+
+
+def _shorten_file_name(name):
+    """A name longer than MAX_FILE_NAME_BYTES, made SHORTEN_FILE_NAME_TO bytes long: the start of the name, '~' and 8 characters of a hash of the whole name (so two long names
+    that start alike stay different), and the extension (kept when it is 16 bytes or less). Never cuts inside a character."""
+    root, ext = os.path.splitext(name)
+    if _name_bytes(ext) > 16:
+        root, ext = name, ''
+    room = SHORTEN_FILE_NAME_TO - _name_bytes(ext) - 9
+    start = root.encode('utf-8', 'replace')[:room].decode('utf-8', 'ignore')
+    return start + '~' + hashlib.sha1(name.encode('utf-8', 'replace')).hexdigest()[:8] + ext
+
+
+def portable_file_name(name):
+    """The name that file gets in the manifest and on disk: every character that unsafe_file_name_reason refuses becomes '_' (a path separator too, so '../x.exe' becomes '.._x.exe'),
+    a trailing space or dot is dropped, a name that is empty or only dots becomes '_', a Windows device name gets a '_' in front ('CON.txt' -> '_CON.txt') and a name that is too long
+    is shortened. A name that is fine is returned as it is, and the result of this function is always fine (so doing it twice changes nothing)."""
+    out = ''.join('_' if (c in UNSAFE_NAME_CHARS or ord(c) < 32 or ord(c) == 127) else c for c in name).rstrip(' .') or '_'
+    if out.split('.')[0].rstrip(' ').upper() in WINDOWS_DEVICE_NAMES:
+        out = '_' + out
+    if _name_bytes(out) > MAX_FILE_NAME_BYTES:
+        out = _shorten_file_name(out)
+    return out
+
+
+def _unique_portable_name(candidate, taken):
+    """candidate, or candidate with "(1)", "(2)", ... as the duplicate rules add it, until its lower-case form is not in taken (file systems of Windows and macOS ignore case)."""
+    if candidate.lower() not in taken:
+        return candidate
+    root, ext = os.path.splitext(candidate)
+    count = 0
+    while True:
+        count += 1
+        numbered = portable_file_name(numbered_name(root, ext, count))
+        if numbered.lower() not in taken:
+            return numbered
+
+
+def _game_files(game):
+    """All file entries of a manifest game: installers, Galaxy, shared and extras (entries of an old manifest may lack some of the lists)."""
+    return [f for key in ('downloads', 'galaxyDownloads', 'sharedDownloads', 'extras') for f in (game.get(key) or [])]
+
+
+def migrate_unsafe_file_names(gamesdb):
+    """Give every file of the manifest whose name is not portable (unsafe_file_name_reason) the name portable_file_name makes of it, and return how many. No network, no file is touched:
+    the old name goes into old_name (unless a rename is already waiting there), so the next download, verify or clean renames the file on disk with the usual rename handling, and into
+    name_from_server. A new name that another file of the game already has gets "(1)" and so on. A second run finds nothing."""
+    migrated = 0
+    for game in gamesdb:
+        files = _game_files(game)
+        taken = set(f.name.lower() for f in files if f.get('name') and unsafe_file_name_reason(f.name) is None)
+        for f in files:
+            name = f.get('name')
+            if not name or unsafe_file_name_reason(name) is None:
+                continue
+            new = _unique_portable_name(portable_file_name(name), taken)
+            taken.add(new.lower())
+            info('  -> %s: file name "%s" is not portable, stored as "%s"' % (game.get('title'), _printable_name(name), new))
+            if f.get('old_name') is None:
+                f.old_name = name
+            if not f.get('name_from_server'):
+                f.name_from_server = name
+            f.name = new
+            migrated += 1
+    return migrated
+
+
+def _report_refused_name(folder, name, reason):
+    """One warning and one entry in the run summary for a file whose name is refused; the caller skips the file."""
+    shown = _printable_name(name)
+    warn('     refused    %s (%s); run update to give it a portable name' % (shown, reason))
+    run_report.fail('%s/%s' % (folder, shown), 'refused, ' + reason)
+
+
+UNSAFE_XML_NAME_MESSAGE = ("The MD5 XML data of {count} file(s) was not saved because the file name is not portable (run update to give them portable names): {items}.")
+
+
+def _md5_xml_name_ok(name):
+    """True if the MD5 XML file of this file can be written; otherwise the name is collected for one combined warning."""
+    if unsafe_file_name_reason(name) is None:
+        return True
+    note_summarised('md5 xml unsafe name', name, UNSAFE_XML_NAME_MESSAGE)
+    return False
+
+
+UNSAFE_XML_FOLDER_MESSAGE = ("The MD5 XML data of {count} folder(s) was not saved because the folder name is not portable (the game folder, or the operating system or language folder): {items}.")
+
+
+def _md5_xml_folder_ok(folder_name):
+    """True if this name can be a folder of the MD5 XML tree (game folder, operating system, language); otherwise it is collected for one combined warning."""
+    if unsafe_file_name_reason(folder_name) is None:
+        return True
+    note_summarised('md5 xml unsafe folder', folder_name, UNSAFE_XML_FOLDER_MESSAGE)
+    return False
+
+
+def _game_folder_name(slug, suffix=''):
+    """The folder of a game in the library: the slug GOG sends (letters, digits and '_' in practice) plus the suffix for movies and duplicate titles, made portable the way a file name is.
+    A folder that was named otherwise before is renamed by the existing rename handling (old_folder_name), as for any other change of the folder name."""
+    wanted = slug + suffix
+    folder = portable_file_name(wanted)
+    if folder != wanted:
+        warn('game folder name "%s" is not portable, stored as "%s"' % (_printable_name(wanted), folder))
+    return folder
+
+
+# Windows refuses a path of 260 characters or more (MAX_PATH, the last one is the terminating NUL) unless long path support is switched on.
+WINDOWS_PATH_LIMIT = 259
+LONG_PATH_MESSAGE = ("{count} file(s) need a path longer than %d characters. Windows refuses to write such a path unless long path support is on (registry value LongPathsEnabled = 1 under "
+                     "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem) or the library folder has a shorter path. The download is tried anyway: {items}." % WINDOWS_PATH_LIMIT)
+
+
+def _windows_path_limit_in_effect():
+    """True on Windows when long path support is not switched on (or cannot be read), so that a path over WINDOWS_PATH_LIMIT characters would be refused; False everywhere else."""
+    if sys.platform != 'win32':
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\FileSystem') as key:
+            return winreg.QueryValueEx(key, 'LongPathsEnabled')[0] != 1
+    except (ImportError, OSError):
+        return True
+
 
 def _display_name(path):
     """'game folder/file' for messages and the run summary."""
@@ -6215,6 +6415,12 @@ def _queue_item_downloads(job, item, game_items, item_homedir, item_downloaddir,
             run_report.count('files skipped')
             continue
 
+        unsafe = unsafe_file_name_reason(game_item.name)
+        if unsafe:
+            # refused before any path is built from it; the other files go on
+            _report_refused_name(os.path.basename(item_homedir), game_item.name, unsafe)
+            continue
+
         dest_file = os.path.join(item_homedir, game_item.name)
         downloading_file = os.path.join(item_downloaddir, game_item.name)
         provisional_file = os.path.join(item_provisionaldir,game_item.name)
@@ -6251,6 +6457,11 @@ def _queue_item_downloads(job, item, game_items, item_homedir, item_downloaddir,
             run_report.count('files skipped (download limit)')
             continue
 
+
+        if _windows_path_limit_in_effect():
+            longest = max(len(os.path.abspath(path)) for path in (dest_file, downloading_file, provisional_file))
+            if longest > WINDOWS_PATH_LIMIT:
+                note_summarised('path too long', '%s/%s' % (os.path.basename(item_homedir), game_item.name), LONG_PATH_MESSAGE)
 
         info('     download   %s' % game_item.name)
         job.sizes[dest_file] = game_item.size
@@ -7313,6 +7524,11 @@ def cmd_backup(src_dir, dest_dir,skipextras,os_list,lang_list,ids,skipids,skipga
 
 
 
+            unsafe = unsafe_file_name_reason(itm.name)
+            if unsafe:
+                _report_refused_name(game.folder_name, itm.name, unsafe)
+                continue
+
             src_game_dir = os.path.join(src_dir, game.folder_name)
             src_file = os.path.join(src_game_dir, itm.name)
             dest_game_dir = os.path.join(dest_dir, game.folder_name)
@@ -7493,6 +7709,11 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
             if skipfile_skip:
                 info('skipping %s (matches %s)' % (itm.name, skipfile_skip))
                 skip_cnt += 1
+                continue
+
+            unsafe = unsafe_file_name_reason(itm.name)
+            if unsafe:
+                _report_refused_name(game.folder_name, itm.name, unsafe)
                 continue
 
             itm_dirpath = os.path.join(game.folder_name, itm.name)

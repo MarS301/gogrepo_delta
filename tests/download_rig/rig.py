@@ -135,6 +135,17 @@ def sc_old_manifest_entries(srv, root):
         for key in ('folder_name', 'galaxyDownloads', 'sharedDownloads'): item.pop(key, None)
     return dict(items=w.items, kwargs={})
 @scenario
+def sc_unsafe_file_names(srv, root):
+    # entry 0.5.89: names that cannot be a file name on Linux, Windows and macOS are refused when the file is queued; the good files of the same game and of another game download as usual
+    w = standard_world(srv)
+    alpha = w.items[0]
+    alpha['downloads'] += [w.file('alpha', '../evil.exe', 11, 500, key='alpha__evil1', xml=None)[0],        # leaves the game's folder
+                           w.file('alpha', 'sub/inner.exe', 12, 500, key='alpha__evil2', xml=None)[0],      # a folder inside it
+                           w.file('alpha', 'setup:2.exe', 13, 500, key='alpha__evil3', xml=None)[0],        # colon: Windows and macOS
+                           w.file('alpha', 'CON.txt', 14, 500, key='alpha__evil4', xml=None)[0]]            # Windows device name
+    alpha['extras'] += [w.file('alpha', 'what?.pdf', 15, 500, key='alpha__evil5', xml=None, kind='extras')[0]]
+    return dict(items=w.items, kwargs={})
+@scenario
 def sc_fresh_download(srv, root):
     w = standard_world(srv); return dict(items=w.items, kwargs={})
 @scenario
