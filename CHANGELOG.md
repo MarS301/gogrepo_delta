@@ -54,6 +54,9 @@ non-ASCII names, so those two stay out; what was left is cheap hardening and the
   Windows: a name whose second character is a colon is taken for a drive and the folder is thrown away, so the test of a refused name tried to create a folder `a:`. (3) A test that a MD5 XML file was *not*
   written joined its path the same way, so it could never fail on Windows. `path_in(folder, name)` (folder, separator, name) now builds such paths in the tests. The same join behaviour is one more reason why
   a `:` in a name is refused before any path is built from it: on Windows `c:evil.exe` would be written to the current folder of drive C.
+- **Fixed in the tests of this entry: the path-limit tests no longer depend on the length of the temporary folder.** They assumed a short one; the macOS runner of the CI has about 60 characters, so the library path
+  of the test was already near the limit and `short.exe` counted as too long as well (4 files instead of 3). The test now fills one folder so that the longest of the three paths is exactly 200 characters,
+  whatever the temporary folder is, and skips when that folder is too deep (over about 165 characters) to do so.
 - **DIFFERENCE: on Windows without long path support, `download` may now print one warning about long paths.** Nothing else changes: no file is refused or renamed because of its path length.
 - **Tests:** new `tests/test_portable_paths.py` (18 tests: the folder helper, `update` with unsafe and duplicate slugs and with a folder stored under another name, the three MD5 XML folders, the path limit
   with the boundary of exactly 259 and 260 characters, the combined warning, the three places, an up-to-date file, and the detection with a simulated registry including a missing `winreg` and an unreadable value).

@@ -135,14 +135,23 @@ class Md5FolderTests(trs.TempDirTests):
 
 
 class PathLimitQueueTests(LogCase):
+    PROVISIONAL_LENGTH = 200
+
     def setUp(self):
         super().setUp()
         self.dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-        self.lib = os.path.join(self.dir, 'l' * 100, 'm' * 60)               # a long library path
+        # A library path of a length that does not depend on the temporary folder (the one of a macOS runner is long, a Windows one not): one folder is filled up so that the path of the
+        # provisional folder, the longest of the three places, is exactly PROVISIONAL_LENGTH characters. A name of a few characters then stays far below the limit of 259.
+        tail = os.path.join(g.DOWNLOADING_DIR_NAME, g.PROVISIONAL_DIR_NAME, 'alpha')
+        fill = self.PROVISIONAL_LENGTH - len(os.path.abspath(self.dir)) - 1 - len(tail) - 1               # separator, filler, separator, tail
+        if not 1 <= fill <= 255:
+            self.skipTest('the temporary folder has a path of an unusable length (%d characters)' % len(os.path.abspath(self.dir)))
+        self.lib = os.path.join(self.dir, 'l' * fill)
         self.home = os.path.join(self.lib, 'alpha')
         self.downloaddir = os.path.join(self.lib, g.DOWNLOADING_DIR_NAME, 'alpha')
-        self.provisionaldir = os.path.join(self.lib, g.DOWNLOADING_DIR_NAME, g.PROVISIONAL_DIR_NAME, 'alpha')
+        self.provisionaldir = os.path.join(self.lib, tail)
+        self.assertEqual(len(os.path.abspath(self.provisionaldir)), self.PROVISIONAL_LENGTH)
 
     def longest_with(self, name_length):
         return len(os.path.abspath(os.path.join(self.provisionaldir, 'n' * name_length)))
