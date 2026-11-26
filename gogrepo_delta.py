@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.91'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.92'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -6038,8 +6038,7 @@ def _clean_work_dir(work_dir, all_items_by_title, dryrun, skip_dir=None):
                             shutil.rmtree(cur_fulldir)
                     else:
                         # dir is valid game folder, check its files
-                        game_items = (all_items_by_title[cur_dir].downloads + all_items_by_title[cur_dir].galaxyDownloads +
-                                      all_items_by_title[cur_dir].sharedDownloads + all_items_by_title[cur_dir].extras)
+                        game_items = _game_files(all_items_by_title[cur_dir])       # the lists of an entry from before they existed are missing: no AttributeError
                         has_unknown_filename = any(game_item.name is None and not getattr(game_item, 'unreleased', False) for game_item in game_items)
                         expected_filenames = [game_item.name for game_item in game_items if game_item.name is not None]
                         if has_unknown_filename:
@@ -7016,11 +7015,13 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
     if dryrun:
         info("{} left to download".format(_gigs(sum(job.sizes.values()))))
         run_report.count('files that would be downloaded', len(job.work_dict), sum(job.sizes.values()))
+        flush_summarised()      # the combined warnings (long paths, ...) belong above the summary, not after "exiting..."
         return  # bail, as below just kicks off the actual downloading
 
     if job.work.empty():
         if job.work_provisional.empty():
             info("nothing to download")
+            flush_summarised()
             return
         # Nothing is left to download, but an interrupted earlier run had finished some files that are still in !provisional.
         info("nothing else needs downloading; moving %d completed file(s) that an earlier run left in '%s' to their place"
@@ -7028,6 +7029,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
         _finish_provisional_downloads(job)
         _remove_empty_subdirs(downloadingdir, skip_dir=PROVISIONAL_DIR_NAME)
         _remove_empty_subdirs(provisionaldir)
+        flush_summarised()
         return
 
     downloading_root_dir = os.path.join(savedir, DOWNLOADING_DIR_NAME)
@@ -8456,7 +8458,7 @@ def clean_target_problem(cleandir, items):
         for key in sorted(game_folders):
             item = game_folders[key]
             for download in (getattr(item, 'downloads', []) + getattr(item, 'galaxyDownloads', []) + getattr(item, 'sharedDownloads', []) + getattr(item, 'extras', [])):
-                if os.path.normcase(download.name) in files:
+                if getattr(download, 'name', None) and os.path.normcase(download.name) in files:
                     found, why = item, "it contains the file '%s' of that game" % files[os.path.normcase(download.name)]
                     break
             if found is not None:
@@ -8888,6 +8890,7 @@ class GnomeSessionInhibitor(DBusSessionInhibitor):
 
 if __name__ == "__main__":
     exit_status = 0
+    wakelock = None             # not made yet: if Wakelock() itself fails, the finally below must not fail as well and hide the real error
     try:
         wakelock = Wakelock()
         wakelock.take_wakelock()
@@ -8918,7 +8921,7 @@ if __name__ == "__main__":
         log_exception('fatal...')
         sys.exit(1)
     finally:
-        wakelock.release_wakelock()
+        if wakelock is not None:
+            wakelock.release_wakelock()
     if exit_status:
         sys.exit(exit_status)     # 1: the run finished but something failed (listed in the summary)
-

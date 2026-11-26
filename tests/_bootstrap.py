@@ -14,7 +14,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAUNCH_DIR = os.getcwd()
 SCRATCH_DIR = os.path.realpath(tempfile.mkdtemp(prefix='gogrepo_delta_cwd_'))
 os.chdir(SCRATCH_DIR)
-atexit.register(shutil.rmtree, SCRATCH_DIR, True)
+
+
+def remove_scratch_dir():
+    """Remove SCRATCH_DIR at the end of the run. Windows cannot delete a folder that is the current folder of a process, nor a file that is open, and the removal below ignores errors:
+    so the folder was left behind after every run on Windows (Linux and macOS do not mind). A test that ran main() has attached the script's log handler, which holds gogrepo.log
+    in this folder open until the program ends. Leave the folder and close the log files first."""
+    import logging
+    try:
+        os.chdir(LAUNCH_DIR)
+    except OSError:
+        os.chdir(tempfile.gettempdir())
+    logging.shutdown()
+    shutil.rmtree(SCRATCH_DIR, True)
+
+
+atexit.register(remove_scratch_dir)
 for _name in ('html5lib', 'psutil'):
     try:
         __import__(_name)
@@ -24,6 +39,7 @@ for _name in ('html5lib', 'psutil'):
 # The tests must not be influenced by (or write into) a real gogrepo_delta.cfg in the folder they are started from.
 # The script looks for its config file at the path in this variable; scripts started by the tests inherit it.
 _CONFIG_DIR = tempfile.mkdtemp(prefix='gogrepo_delta_tests_')
+atexit.register(shutil.rmtree, _CONFIG_DIR, True)       # it was left behind in the temporary folder by every test run
 os.environ['GOGREPO_DELTA_CONFIG'] = os.path.join(_CONFIG_DIR, 'gogrepo_delta.cfg')
 
 if 'gogrepo_delta' not in sys.modules:

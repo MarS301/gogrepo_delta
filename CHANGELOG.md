@@ -22,15 +22,49 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
   (`LongPathsEnabled`) or a shorter library path. (2) Names that differ only in Unicode form are not normalized (macOS stores one form, so two such names would be one file there), and the duplicate rules at
   update compare names exactly, so two files whose names differ only in case are two manifest entries, and one file on Windows and macOS. Neither was seen in a real manifest; the migration of old names does
   ignore case.
-- `_clean_work_dir` reads `galaxyDownloads` and `sharedDownloads` of every game in the manifest directly. `handle_game_renames` only gives them to the games that `-ids` / `-skipids`
-  selected, so a manifest entry from before those fields existed, together with a leftover folder for it in `!downloading` or `!provisional`, makes `download -ids ...` stop with an
-  `AttributeError` (checked on the function). Manifests written by `update` always have the fields, so this needs a very old manifest.
 - A language group that contains only a patch counts as "has your language" for that system (edge case, not handled).
 - Reading the legacy manifest format is 3-4 times slower than it was with `eval` (0.7 s for a 1.2 MB file, 12 s for 23 MB); the JSON format, which is
   the default, is not affected.
 - Saving the legacy manifest format still re-formats the whole manifest on every save (the cost grows with the library); it is not the default.
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
+
+## 0.5.92 - 25.11.2026 - combined warnings in a dry run, wakelock, two fixes found by tests that failed first, a test folder that was never removed
+
+Each fix below has a test that failed before the change (open item 2 and finding F were checked first: item 2 turned out to fail only in one combination, and the other commands were fine).
+
+- **Fixed: the combined warnings of `download` appeared after the summary in a dry run** (seen in a real run: the long-path warning of 0.5.91 came after `exiting...`). `cmd_download` only flushed the
+  collected warnings (`note_summarised`) at the end of a real download; the dry run, the "nothing to download" exit and the "only finished files in !provisional" exit returned before that, and the
+  program's exit printed them last. All three now flush before they return, so the warnings stand above the summary. A test makes a warning pending before each way out and checks that it is printed
+  during the run (and, for the dry run, after the count of what is left to download).
+- **Fixed (finding G): `Wakelock()` failing hid the real error.** `wakelock = Wakelock()` was inside the `try`, and the `finally` used the name, so a failing constructor ended in an `UnboundLocalError`
+  that replaced the real error. The block under `if __name__ == "__main__"` now starts with `wakelock = None` and releases only a wakelock that was made (it stays a block: the entry point tests run its source). Tests for it: constructor fails (the real error is logged, exit status 1, the command does not run), taking fails, success, failures status, error in the
+  command, Ctrl+C and `SystemExit` with its own code.
+- **Fixed (open item 2): `download -ids ...` stopped with `AttributeError: galaxyDownloads`** for a manifest with entries from before the fields `galaxyDownloads` and `sharedDownloads` existed, when a
+  game that `-ids` did not select had a leftover folder in `!downloading` or `!provisional`. `_clean_work_dir` read the lists of every game directly, and only the selected games get the defaults. It now
+  reads them with `_game_files` (an entry may lack any of the four lists). The case was first reproduced with a new rig scenario; the other commands (`verify`, `backup`, `import`, `clean`, `list`, `export`,
+  `trash`) and `download` with `-ids`, `-skipids` and a dry run were checked with old entries and work, and now have tests.
+- **Fixed (finding F): `clean_target_problem` stopped with a `TypeError` for a file of the manifest whose name is not known yet** (an unreleased extra has `name` = None). It is the check that clean runs
+  on the folder it is given, and it looks through the files of the games when no game folder is inside: the very case of a clean started on the folder of one game, where it should print its explanation.
+  An entry without a name is skipped now.
+- **New tests: `--dryrun` and the file-name check (0.5.89).** A dry run refuses the same five names with one warning and one summary entry each, writes nothing and counts the same files as a dry run without
+  the bad entries.
+- **Fixed in the tests: every test run left folders behind in the temporary folder.** `_bootstrap.py` made a `gogrepo_delta_tests_*` folder for the configuration file and never removed it (110 had piled up in
+  one working session); it is removed when the process ends now. The scratch folder `gogrepo_delta_cwd_*` was also meant to be removed at exit, but that never worked on Windows, for two reasons: a folder cannot be
+  deleted while it is the current folder of the process, and not while a file in it is open (a test that runs `main()` attaches the script's log handler, which then holds `gogrepo.log` in that folder open;
+  at the end of a full run the folder holds that file and the process is inside it), and the removal ignores errors, so Windows kept one folder after every run (found by the new test on his Windows).
+  `remove_scratch_dir` now leaves the folder and closes the log files first. Two tests start a Python that imports the bootstrap: both folders are gone afterwards, and before the cleanup the process is in the
+  folder and the log file is open (the child does what `main()` does), afterwards neither (the two conditions Windows needs, checked on every system). You can delete the old folders: in PowerShell
+  `Remove-Item "$env:TEMP\gogrepo_delta_tests_*", "$env:TEMP\gogrepo_delta_cwd_*" -Recurse -Force`.
+- **Fixed in the tests: three test classes left their temporary folders on Windows** (`cleanorph_*` from `test_clean_orphaning`, `cleanup_incomplete_*` from `test_cleanup_incomplete_metadata`, `resumeretry_*` from
+  `test_resume_retry_limit`; seen on a screenshot of his temporary folder: the files were deleted, the folders stayed). Each registered the cleanup that changes back to the old folder before the cleanup that removes
+  the temporary folder, and `addCleanup` runs in reverse, so the folder was removed while the process was still inside it (Windows refuses, and `ignore_errors=True` hid it). The order is swapped.
+  `tests/test_cleanup_order.py` reads all test files and fails for this order (and for a `tearDown` that removes the folder before it changes back); it runs on Python 3.8 (no `ast.unparse`).
+- **Fixed in the tests: the download rig left its working folder behind, and its fake server running, when a scenario failed while it was set up** (found by looking at what a full test run leaves in the
+  temporary folder: the test with a scenario that does not exist left a `rig_*` folder every time). `_run` now stops the server and removes the folder before it raises; a test checks both.
+- **Tests:** `tests/test_cli_main.py` (7), `tests/test_old_entries_and_unnamed_files.py` (14), `tests/test_bootstrap_cleanup.py` (2), `tests/test_cleanup_order.py` (2), and in `tests/test_download.py` 8 more with 5 new rig scenarios (and 1 in `tests/test_old_python_support.py`)
+  (`unsafe_file_names_dryrun`, `old_manifest_ids`, `old_manifest_skipids`, `old_manifest_dryrun`, `old_manifest_leftover_ids`). 14 mutations of this change were checked; 12 were caught, one was first missed
+  (an old entry that also lacks `extras`, which got a test) and one is an equivalent change of the same behaviour. The scratch folder cleanup was checked with 3 more, and the order guard with the wrong order put back in one test: all caught.
 
 ## 0.5.91 - 24.11.2026 - the rest of the path: game folder, MD5 XML folders, and a warning for paths over 259 characters on Windows
 

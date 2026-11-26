@@ -47,8 +47,8 @@ class ResumeRetryTests(unittest.TestCase):
     def setUp(self):
         self.cwd, self.dir = os.getcwd(), tempfile.mkdtemp(prefix='resumeretry_')
         os.chdir(self.dir)
-        self.addCleanup(os.chdir, self.cwd)
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.addCleanup(os.chdir, self.cwd)             # cleanups run in reverse: leave the folder first, Windows cannot remove the current folder
         self.account = FakeAccount(5)
         for p in (mock.patch.object(g, 'request', self.account.request),
                   mock.patch.object(g, 'makeGOGSession', lambda: SimpleNamespace(token={}))):
