@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.91-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.92-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
