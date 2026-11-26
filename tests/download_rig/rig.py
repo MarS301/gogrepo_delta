@@ -146,6 +146,30 @@ def sc_unsafe_file_names(srv, root):
     alpha['extras'] += [w.file('alpha', 'what?.pdf', 15, 500, key='alpha__evil5', xml=None, kind='extras')[0]]
     return dict(items=w.items, kwargs={})
 @scenario
+def sc_unsafe_file_names_dryrun(srv, root):
+    # entry 0.5.92: the same as unsafe_file_names, as a dry run (the check runs in the queue step that a dry run goes through as well)
+    d = SCENARIOS['unsafe_file_names'](srv, root); d['kwargs'] = dict(dryrun=True); return d
+def _old_manifest(srv, root, **kwargs):
+    d = SCENARIOS['old_manifest_entries'](srv, root); d['kwargs'] = kwargs; return d
+@scenario
+def sc_old_manifest_ids(srv, root):
+    return _old_manifest(srv, root, ids=['alpha'])
+@scenario
+def sc_old_manifest_skipids(srv, root):
+    return _old_manifest(srv, root, skipids=['alpha'])
+@scenario
+def sc_old_manifest_dryrun(srv, root):
+    return _old_manifest(srv, root, dryrun=True)
+@scenario
+def sc_old_manifest_leftover_ids(srv, root):
+    # entry 0.5.92 (open item 2): beta has no galaxyDownloads/sharedDownloads, -ids selects only alpha, and beta has a leftover folder in !downloading and !provisional.
+    # _clean_work_dir read the lists of beta directly (only the selected games get the defaults) and download stopped with an AttributeError.
+    d = _old_manifest(srv, root, ids=['alpha'])
+    def setup(r):
+        put(r, '!downloading/beta/stale.bin', b'1'); put(r, '!downloading/!provisional/beta/stale2.bin', b'2')
+    d['setup'] = setup
+    return d
+@scenario
 def sc_fresh_download(srv, root):
     w = standard_world(srv); return dict(items=w.items, kwargs={})
 @scenario
@@ -626,9 +650,13 @@ def _run(mod, name):
     from unittest import mock
     from types import SimpleNamespace
     work = tempfile.mkdtemp(prefix='rig_'); srv = Server(); cwd = os.getcwd(); os.chdir(work)
-    savedir = os.path.join(work, 'save'); os.makedirs(savedir)
-    spec = SCENARIOS[name](srv, savedir)
-    if spec.get('setup'): spec['setup'](savedir)
+    try:
+        savedir = os.path.join(work, 'save'); os.makedirs(savedir)
+        spec = SCENARIOS[name](srv, savedir)
+        if spec.get('setup'): spec['setup'](savedir)
+    except BaseException:       # a scenario that does not exist or fails while it is set up: stop the server and remove the folder, as the end of a normal run does
+        os.chdir(cwd); srv.stop(); shutil.rmtree(work, ignore_errors=True)
+        raise
     with open('gog-token.dat', 'w') as f: pprint.pprint({'access_token': 'x', 'refresh_token': 'y', 'expiry': time.time() + 1e9, 'user': 'u'}, stream=f)
     mod.save_manifest(spec['items'])
     orig_request, port, calls = mod.request, srv.port, []

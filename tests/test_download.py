@@ -127,6 +127,79 @@ class UnsafeFileNameTests(Checks):
         self.assertTrue(all(why.startswith('refused, ') for what, why in r['report']['failures']))
 
 
+class UnsafeFileNameDryRunTests(Checks):
+    """Entry 0.5.92: a dry run checks the file names as well, and reports them the same way."""
+    BAD = UnsafeFileNameTests.BAD
+
+    def test_a_dry_run_refuses_the_same_files_and_writes_nothing(self):
+        r = result('unsafe_file_names_dryrun')
+        refused = [m for m in messages(r, 'WARNING') if 'refused' in m]
+        self.assertEqual(len(refused), len(self.BAD), refused)
+        for name in self.BAD:
+            self.assertEqual(len([m for m in refused if name in m]), 1, name)
+        self.assertEqual(sorted(what for what, why in r['report']['failures']), sorted('alpha/' + name for name in self.BAD))
+        self.assertEqual(files(r), {})                                           # a dry run writes nothing, and nothing outside the library
+        self.assertEqual(r['hits'], {})
+
+    def test_the_count_of_a_dry_run_leaves_the_refused_files_out(self):
+        self.assertEqual(result('unsafe_file_names_dryrun')['report']['counts'], result('dryrun_fresh')['report']['counts'])
+
+
+class OldManifestEntryOptionsTests(Checks):
+    """Entry 0.5.92: entries from before galaxyDownloads, sharedDownloads and folder_name existed, with the options that choose games."""
+    def test_ids_skipids_and_a_dry_run_work_with_old_entries(self):
+        for name, expected in (('old_manifest_ids', ['alpha/setup_alpha.exe', 'alpha/manual.pdf']), ('old_manifest_skipids', ['beta/setup_beta.exe', 'beta/extra_beta.exe'])):
+            r = result(name)
+            self.assertIsNone(r['exc'], name)
+            self.assertEqual(messages(r, 'ERROR'), [], name)
+            for relpath in expected:
+                self.assertServed(r, relpath)
+        self.assertEqual(result('old_manifest_ids')['hits'].get(('GET', 'beta__setup_beta.exe')), None)
+        r = result('old_manifest_dryrun')
+        self.assertIsNone(r['exc'])
+        self.assertEqual(files(r), {})
+        self.assertEqual(r['report']['counts']['files that would be downloaded'][0], 8)
+
+    def test_a_leftover_folder_of_a_game_that_ids_did_not_select_does_not_stop_the_download(self):
+        r = result('old_manifest_leftover_ids')
+        self.assertIsNone(r['exc'])                                              # was ('AttributeError', 'galaxyDownloads')
+        self.assertNotLogged(r, 'AttributeError')
+        self.assertServed(r, 'alpha/setup_alpha.exe')
+        self.assertAbsent(r, 'beta/setup_beta.exe')                              # beta was not selected
+
+
+class CombinedWarningsAreFlushedTests(unittest.TestCase):
+    """Entry 0.5.92: cmd_download reports the combined warnings (note_summarised) before it returns, on every way out; before, a dry run left them to the exit
+    of the program, where they appeared after the summary and "exiting...". A pending note is made before the run, so that no real problem is needed."""
+    MESSAGE = 'FLUSH-TEST {count} {items}'
+
+    def run_with_pending_note(self, scenario):
+        gogrepoc.flush_summarised()
+        self.addCleanup(gogrepoc.flush_summarised)
+        gogrepoc.note_summarised('flush test', 'pending-item', self.MESSAGE)
+        return rig.run(gogrepoc, scenario)
+
+    def assertFlushedDuringTheRun(self, scenario):
+        r = self.run_with_pending_note(scenario)
+        lines = [m for lvl, m in r['logs'] if m.startswith('FLUSH-TEST 1 pending-item')]
+        self.assertEqual(len(lines), 1, '%s: %s' % (scenario, [m for lvl, m in r['logs']][-4:]))
+        return r
+
+    def test_a_dry_run(self):
+        r = self.assertFlushedDuringTheRun('dryrun_fresh')
+        texts = [m for lvl, m in r['logs']]
+        self.assertLess(next(i for i, m in enumerate(texts) if 'left to download' in m), next(i for i, m in enumerate(texts) if m.startswith('FLUSH-TEST')))
+
+    def test_nothing_to_download(self):
+        self.assertFlushedDuringTheRun('all_up_to_date')
+
+    def test_only_finished_files_in_provisional_are_left(self):
+        self.assertFlushedDuringTheRun('provisional_only')
+
+    def test_a_download(self):
+        self.assertFlushedDuringTheRun('fresh_download')
+
+
 class FilterTests(Checks):
     def test_os_and_language_filters(self):
         r = result('filter_os_lang')      # linux only, English only

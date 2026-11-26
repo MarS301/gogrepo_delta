@@ -22,8 +22,8 @@ class OrphaningTests(unittest.TestCase):
     def setUp(self):
         self.cwd, self.dir = os.getcwd(), tempfile.mkdtemp(prefix='cleanorph_')
         os.chdir(self.dir)
-        self.addCleanup(os.chdir, self.cwd)
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.addCleanup(os.chdir, self.cwd)             # cleanups run in reverse: leave the folder first, Windows cannot remove the current folder
         self.library = os.path.join(self.dir, 'library')
         self.game_dir = os.path.join(self.library, 'Game')
         self.orphans = os.path.join(self.library, g.ORPHAN_DIR_NAME, 'Game')

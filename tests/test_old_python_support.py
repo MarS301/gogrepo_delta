@@ -242,5 +242,36 @@ class RigTests(unittest.TestCase):
             rig.run(g, 'there_is_no_such_scenario')
         self.assertEqual(before, os.getcwd())
 
+    def test_a_scenario_that_fails_early_leaves_no_folder_behind(self):
+        import glob
+        import sys
+        import tempfile
+        sys.path.insert(0, os.path.join(_bootstrap.ROOT, 'tests', 'download_rig'))
+        try:
+            import rig
+        finally:
+            sys.path.pop(0)
+        real_server = rig.Server                   # rig.Server is replaced below, so the fake must not look it up again
+
+        class Recording(real_server):
+            made = []
+
+            def __init__(self):
+                real_server.__init__(self)
+                self.stopped = False
+                Recording.made.append(self)
+
+            def stop(self):
+                self.stopped = True
+                real_server.stop(self)
+
+        pattern = os.path.join(tempfile.gettempdir(), 'rig_*')
+        before = set(glob.glob(pattern))
+        with mock.patch.object(rig, 'Server', Recording):
+            with self.assertRaises(KeyError):
+                rig.run(g, 'there_is_no_such_scenario')
+        self.assertEqual(set(glob.glob(pattern)) - before, set())
+        self.assertEqual([server.stopped for server in Recording.made], [True])           # the fake server of the scenario is stopped too
+
 if __name__ == '__main__':
     unittest.main()

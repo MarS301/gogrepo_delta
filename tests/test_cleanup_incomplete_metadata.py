@@ -13,8 +13,8 @@ class IncompleteMetadataCleanupTests(unittest.TestCase):
         self.cwd = os.getcwd()
         self.tempdir = tempfile.mkdtemp(prefix='cleanup_incomplete_')
         os.chdir(self.tempdir)
-        self.addCleanup(os.chdir, self.cwd)
         self.addCleanup(shutil.rmtree, self.tempdir, ignore_errors=True)
+        self.addCleanup(os.chdir, self.cwd)             # cleanups run in reverse: leave the folder first, Windows cannot remove the current folder
         g.run_report.reset()
 
     @staticmethod
