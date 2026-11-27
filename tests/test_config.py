@@ -567,7 +567,7 @@ class GeneratedFileTests(ConfigTestCase):
         commands = g.build_parser()[1]
         shared = g.shared_options(commands)
         own = [c for c, sub in commands.choices.items() if any(a.dest not in shared for a in g.config_options(sub, c))]
-        self.assertEqual(parser.sections(), ['settings', 'common'] + own)
+        self.assertEqual(parser.sections(), ['settings', 'languages', 'common'] + own)
         self.assertNotIn('clear_partial_downloads', own)       # everything it has is in [common]
 
     def test_every_setting_is_in_it_with_its_default(self):

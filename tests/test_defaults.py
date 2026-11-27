@@ -127,6 +127,19 @@ ALL_BUT = lambda valid, skipped: [x for x in valid if x not in skipped]
 
 
 class DefaultsPerCommandTests(unittest.TestCase):
+    """download, import, verify and backup default to this computer's system and language; update (0.5.94) keeps everything that GOG offers (see test_update_everything.py)."""
+    @staticmethod
+    def default_os(command):
+        return list(g.VALID_OS_TYPES) if command == 'update' else ['mac']
+
+    @staticmethod
+    def default_lang(command):
+        return list(g.VALID_LANG_TYPES) if command == 'update' else ['de']
+
+    @staticmethod
+    def default_fallback(command):
+        return None if command == 'update' else 'en'
+
     def call(self, command, flags, detected_lang='de'):
         argv, function, os_pos, lang_pos = COMMANDS[command]
         args = g.process_argv(['gogrepo_delta.py'] + argv + list(flags) + ['-nolog'])
@@ -146,15 +159,15 @@ class DefaultsPerCommandTests(unittest.TestCase):
 
     def test_nothing_given_uses_the_detected_os_and_language(self):
         for command in COMMANDS:
-            self.assertEqual(self.selection(command), (['mac'], ['de']), command)
+            self.assertEqual(self.selection(command), (self.default_os(command), self.default_lang(command)), command)
 
     def test_explicit_os_overrides_only_the_os(self):
         for command in COMMANDS:
-            self.assertEqual(self.selection(command, '-os', 'linux', 'windows'), (['linux', 'windows'], ['de']), command)
+            self.assertEqual(self.selection(command, '-os', 'linux', 'windows'), (['linux', 'windows'], self.default_lang(command)), command)
 
     def test_explicit_lang_overrides_only_the_language(self):
         for command in COMMANDS:
-            self.assertEqual(self.selection(command, '-lang', 'fr', 'pl'), (['mac'], ['fr', 'pl']), command)
+            self.assertEqual(self.selection(command, '-lang', 'fr', 'pl'), (self.default_os(command), ['fr', 'pl']), command)
 
     def test_explicit_os_and_lang(self):
         for command in COMMANDS:
@@ -164,13 +177,13 @@ class DefaultsPerCommandTests(unittest.TestCase):
         for command in COMMANDS:
             os_list, lang_list = self.selection(command, '-skipos', 'linux')
             self.assertEqual(os_list, ['windows', 'mac'], command)
-            self.assertEqual(lang_list, ['de'], command)
+            self.assertEqual(lang_list, self.default_lang(command), command)
 
     def test_skiplang_means_everything_except(self):
         for command in COMMANDS:
             os_list, lang_list = self.selection(command, '-skiplang', 'en', 'de')
             self.assertEqual(lang_list, ALL_BUT(g.VALID_LANG_TYPES, ['en', 'de']), command)
-            self.assertEqual(os_list, ['mac'], command)
+            self.assertEqual(os_list, self.default_os(command), command)
 
     def test_skipos_and_skiplang_together(self):
         for command in COMMANDS:
@@ -190,7 +203,7 @@ class DefaultsPerCommandTests(unittest.TestCase):
 
     def test_english_fallback_comes_with_a_non_english_default_language(self):
         for command in COMMANDS:
-            self.assertEqual(self.fallback(command), 'en', command)
+            self.assertEqual(self.fallback(command), self.default_fallback(command), command)
 
     def test_no_fallback_when_the_default_language_is_english(self):
         for command in COMMANDS:
@@ -203,7 +216,7 @@ class DefaultsPerCommandTests(unittest.TestCase):
 
     def test_fallback_still_applies_when_only_the_os_is_given(self):
         for command in COMMANDS:
-            self.assertEqual(self.fallback(command, '-os', 'linux'), 'en', command)
+            self.assertEqual(self.fallback(command, '-os', 'linux'), self.default_fallback(command), command)
 
     def test_the_fallback_is_announced(self):
         argv, function, _, _ = COMMANDS['download']

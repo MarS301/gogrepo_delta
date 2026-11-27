@@ -29,6 +29,61 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.94 - 27.11.2026 - `update` keeps everything GOG offers by default
+
+Until now `update` kept only this computer's operating system and language (with English as the fallback) unless `-os` / `-lang` were given. That made the manifest depend on a choice that belongs to the other
+commands: changing the language needed `update --full`, an update with other flags dropped entries (and `clean` then took the files on disk for orphans, hence the warning before every update), and a language
+that GOG added and the table lacked was dropped without a word. Now the manifest records everything and `download`, `verify`, `import` and `backup` choose when they read it. Measured by the maintainer on a
+large library: a full update takes about 1 h 20 min instead of 50 min and the manifest is about 38 MB instead of 32 MB.
+
+- **Changed: `update` without `-os` / `-lang` keeps every operating system and every language** (`apply_os_lang_defaults(args, keep_everything=True)`, called by `update` only; the other four commands are
+  unchanged: this computer's system and language, English as the fallback). Two log lines say so (`no -os given, keeping every operating system (windows, linux, mac)`, `no -lang given, keeping every language`);
+  this computer's system and language are not asked any more for `update`, and no fallback language is used (it has no meaning when every language is kept). `-os`, `-lang`, `-skipos`, `-skiplang` and the config
+  file (`[common]` and `[update]`) narrow it as before; `-ids`, `-skipids`, `-full`, `-skipknown` and `-updateonly` are not touched.
+- **New: the value `all` for `-os` and `-lang`** (in `update`, `download`, `verify`, `import`, `backup`; in `list`, which filters only when asked, it means no filter), also in the config file. The reason: `[common]`
+  applies to `update` too, so `os = windows` there narrows `update`; `[update]` with `os = all` and `lang = all` keeps everything for `update` while `[common]` narrows the others. `all` cannot be combined with
+  other values (`error: -lang all cannot be combined with other values (all de)`); `-skipos all` / `-skiplang all` are refused as before (`all` is no value for them).
+- **Changed: a language without a code is kept when no language was narrowed** (`filter_downloads`: when `lang_list` contains every known language, the names that GOG offers for the game and that
+  `LANG_TABLE` lacks are kept as well, under the name GOG sends). `download` and the others still cannot choose such a language (they choose by code), but once it is added to `[languages]` the entries are
+  there and no `update --full` is needed. Leaving out even one known language (`-skiplang fr`) is a narrowing: the unknown ones are dropped then, as before. `list` shows the name where it has no code.
+  The warning at the end of `update` about unknown languages (0.5.93) is unchanged.
+- **Changed: the help text of the options of `update`, the README** (the description of `update`, the section "Operating system and language selection", the manifest note, the paragraph about
+  `[languages]`) say what the new default is and what it costs.
+- **DIFFERENCE: a plain `update` is slower and the manifest bigger** (see above); **a manifest made before 0.5.94 stays narrow for the games that are not fetched again** until `update --full` is run once.
+  **A `[common]` section with `os` or `lang` still narrows `update`** (it did before as well); move it to the sections of the commands that should use it, or add `os = all` / `lang = all` to `[update]`.
+- **Not changed:** the warning before an update that would drop entries (`warn_if_update_narrows_manifest`): it only appears now when `-os` / `-lang` (or the config file) are narrower than the manifest.
+- **Tests:** new `tests/test_update_everything.py` (27 tests: the new default and its log lines, that this computer's system and language are not asked, narrowing by options and skip options, the config file
+  (`[common]`, `[update]` with `all`, other sections, an option beating the file), `all` in every command and in `list`, the refusals, `filter_downloads` with and without a narrowing, `filter_languages` on
+  a manifest that holds everything, and a real `update` run with fake GOG data: it stores every language and system, choosing German with the English fallback from that manifest gives exactly what the old
+  narrow update stored, a narrow update still stores only what was asked, `all` works); `tests/test_defaults.py` now states that `update` is the one command with another default. 18 mutations of this change
+  were checked: 17 were caught, one is equivalent (the list of valid names may hold a name twice).
+
+## 0.5.93 - 26.11.2026 - unknown languages are reported, and the config file can add languages
+
+`LANG_TABLE` holds the language names that GOG uses (32 of them). `filter_downloads` keeps only the files in languages that have a code, so a language that GOG offers and that the table lacks could not be
+chosen and its files were dropped without a word (only the diagnostics printed "Unknown language in manifest"). The 26 different names in the language lists of the maintainer's games are all in the table; this
+is for the next language GOG adds.
+
+- **New: one combined warning at the end of `update`** (`note_unknown_languages`, from `unknown_language_names`): it names every language in the manifest that has no code, with the games that offer it
+  (`"Klingon" (in 3 games, e.g. alpha)`), says that the files in it are not downloaded, and what to do. It reads `available_langs` of **every game in the manifest** (GOG's list of languages for the game, stored
+  by every update), so also the games that this run did not fetch again. Not a failure (no exit status 1); control characters in a name are shown escaped.
+- **New: the config file can add languages.** A section `[languages]` with lines `code = name`. `load_extra_languages` checks them: the code is 1 to 16 lower-case letters, digits or `_` and starts with a letter
+  (written in any case, used in lower case); a built-in code with another name is refused (the same entry again is accepted and adds nothing); a name that already has a code is refused; the name must be usable as a
+  folder name (`unsafe_file_name_reason`: the MD5 XML tree has a folder per language); an empty value means "not set". A wrong entry stops the program at the start with `config file PATH: [languages] CODE = NAME: reason`,
+  as a wrong value in `[settings]` does. The codes then work with `-lang`, `-skiplang` and in `lang = ...` of `[common]` and the command sections. They are added to `LANG_TABLE` and to the same list object
+  `VALID_LANG_TYPES` (`EXTRA_LANGUAGES` holds them) when the module is loaded, further down than the table, because the check needs the file name functions.
+- **Changed: the new config file explains the section** (and shows a commented example line; the file stays within its 260 lines), and the reader of the flag defaults knows `[languages]` as a section (it would
+  have reported it as "not a command"). The test of the sections of the new file expects `settings, languages, common, ...` now.
+- **Changed: `gogrepo_survey_names.py` lists the language names that the program does not know**, with the line to add.
+- **After adding a language, run `update --full` once:** a game is fetched again only when it is new or updated, and its files in the new language enter the manifest only when it is fetched (README).
+- **Fixed: README.md said 0.5.91 although the script was 0.5.92** (the README was not raised with the script in 0.5.92). It says 0.5.93 now, and `tests/test_version_files.py` checks that the badge and the
+  "Current version" row equal `__version__`.
+- **DIFFERENCE: a config file with a wrong `[languages]` entry stops the program at the start.** A config file without the section changes nothing.
+- **Not examined:** the language codes that GOG sends for movie files (`movie ... unknown language code ... is skipped`) are separate from the names in the language lists of games; they were not changed.
+- **Tests:** new `tests/test_languages.py` (29 tests: the rules one by one, the names of the real lists, the combined warning, `update` end to end including a game that was not fetched again, a fresh Python that
+  starts with a config file (choosing the code, default, wrong entries, the new file), and the survey) and `tests/test_version_files.py` (2). 26 mutations of this change were checked: 24 were caught at once, one was
+  missed first (the example line of the new config file; the test now looks for the line itself) and one is equivalent (`configparser` strips the value already).
+
 ## 0.5.92 - 25.11.2026 - combined warnings in a dry run, wakelock, two fixes found by tests that failed first, a test folder that was never removed
 
 Each fix below has a test that failed before the change (open item 2 and finding F were checked first: item 2 turned out to fail only in one combination, and the other commands were fine).

@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.92-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.94-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -48,7 +48,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.92` |
+| **Current version** | `v0.5.94` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort: a CI job tries both and is allowed to fail) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -222,7 +222,7 @@ A browser sign-in page is opened (or its address is displayed). Sign in, then pa
 python gogrepo_delta.py update
 ```
 
-This retrieves library information from GOG and updates `gog-manifest.dat`. The standard update checks new and updated games. The default operating system and language are detected from the current computer.
+This retrieves library information from GOG and updates `gog-manifest.dat`. The standard update checks new and updated games. By default the manifest keeps **every operating system and every language** that GOG offers; `download`, `verify`, `import` and `backup` then choose from it (this computer's system and language by default). Use `--os` / `--lang` to keep fewer.
 
 ### 3. Download games and extras
 
@@ -572,18 +572,19 @@ python gogrepo_delta.py verify --tags "NEXT TO PLAY" Completed --skiptags Abando
 
 ## Operating system and language selection
 
-For `update`, `download`, `verify`, `import`, and `backup`, the default selection is the current computer's operating system and detected language. If detection fails or the detected value is not offered by GOG, the script falls back to Windows and English.
+For `download`, `verify`, `import`, and `backup`, the default selection is the current computer's operating system and detected language. If detection fails or the detected value is not offered by GOG, the script falls back to Windows and English. **`update` is different (since 0.5.94): without `--os` / `--lang` it records everything GOG offers**, so changing the selection of the other commands later needs no new update.
 
 - Use `--os windows linux mac` to explicitly select operating systems.
 - Use `--lang en de` to explicitly select languages.
+- Use `--os all` / `--lang all` for every operating system / language (in `list`: no filter). This also works in the config file: `[update]` with `os = all` and `lang = all` keeps everything for `update` while `[common]` narrows the other commands.
 - Use `--skipos` and `--skiplang` to exclude values instead.
-- The include and exclude forms for the same dimension are mutually exclusive.
+- The include and exclude forms for the same dimension are mutually exclusive, and `all` cannot be combined with other values.
 
-When the language is selected automatically and is not English, English is used as a fallback **per game, file group, and operating system** if the preferred language is unavailable. An explicit `--lang` or `--skiplang` selection disables this automatic fallback. For example, a German default can select German Windows installers and English Linux installers when no German Linux installer exists.
+When the language of `download`, `verify`, `import` or `backup` is selected automatically and is not English, English is used as a fallback **per game, file group, and operating system** if the preferred language is unavailable. An explicit `--lang` or `--skiplang` selection disables this automatic fallback. For example, a German default can select German Windows installers and English Linux installers when no German Linux installer exists.
 
-**Manifest note:** an update replaces the stored file information for each game it fetches. If you need multiple OS/language variants, specify them explicitly (for example, `--os windows linux --lang en de`). A plain update can replace other variants previously stored for an updated game; files already on disk are not automatically deleted.
+**Manifest note:** an update replaces the stored file information for each game it fetches. By default it stores every operating system and language, which takes longer and makes the manifest bigger (one large library: about 80 minutes instead of 50 for a full update, and a manifest of about 38 MB instead of 32 MB); `--os` / `--lang` (or the config file) keep fewer. A manifest made before 0.5.94 holds only what its updates were told to keep, and stays that way for the games that are not fetched again: run `update --full` once to complete it. A narrower update can replace other variants previously stored for an updated game; files already on disk are not automatically deleted. When no language is narrowed, a language that GOG offers and that has no code yet is stored too, under the name GOG sends.
 
-Before a new update starts, the program compares the manifest with the operating systems and languages the update will use. If the update would drop installer entries for other systems or languages, it **warns** (it does not stop): how many installer files of how many games would go and why, that `clean` would then take the files on disk for orphans and move them to `!orphaned`, and that a later update that includes them again adds the entries back as new ones (`download` then checks them again and fetches only what is not right). To avoid it, give all the systems and languages you use with `--os` / `--lang`, or put them in the config file. An update without `--full` says "up to N" because only new and updated games are fetched.
+Before a new update starts, the program compares the manifest with the operating systems and languages the update will use. If the update would drop installer entries for other systems or languages, it **warns** (it does not stop): how many installer files of how many games would go and why, that `clean` would then take the files on disk for orphans and move them to `!orphaned`, and that a later update that includes them again adds the entries back as new ones (`download` then checks them again and fetches only what is not right). To avoid it, leave `--os` / `--lang` out (the default keeps everything), or give all the systems and languages you use, or put them in the config file. An update without `--full` says "up to N" because only new and updated games are fetched.
 
 ## Configuration
 
@@ -592,6 +593,7 @@ On first run, the program creates `gogrepo_delta.cfg` in the current working dir
 The INI-style file has these sections:
 
 - `[settings]`: internal settings such as HTTP timeouts/retries, download chunk size, thread count, logging limits, progress interval, and save thresholds.
+- `[languages]`: extra languages that GOG offers and the program does not know yet (see below).
 - `[common]`: command-line defaults shared by commands.
 - Command sections such as `[update]`, `[download]`, and `[verify]`: command-specific defaults.
 
@@ -616,6 +618,15 @@ lang = en
 download_threads = 4
 http_timeout = 30
 ```
+
+**Languages the program does not know.** The built-in table has 32 languages (`en`, `de`, `fr`, `jp`, `cn`, `es_mx`, ...), each with the name GOG uses for it. A language that GOG offers and that is not in the table cannot be chosen with `--lang`, and its files are not downloaded. When `update` finds such a language in the manifest, it ends with one warning that names it and the games that offer it. To use it, add a line `code = name` to the `[languages]` section, with the name exactly as the warning shows it, and use the code with `--lang`. If your last update kept every language (the default since 0.5.94), the files in that language are already in the manifest; if you had narrowed the languages, run `update --full` once (without `--full` only new and updated games are fetched again):
+
+```ini
+[languages]
+xx = Klingon
+```
+
+The code is what you type after `--lang` (or put in `lang = ...`): 1 to 16 lower-case letters, digits or `_`, starting with a letter, and not a built-in code. The name must not already have a code and must be usable as a folder name. A wrong entry stops the program at the start with a message that names the line. `python gogrepo_survey_names.py` lists the unknown language names of your manifest as well.
 
 Use a different configuration file:
 

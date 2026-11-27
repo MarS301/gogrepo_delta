@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.92'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.94'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -282,7 +282,8 @@ def load_settings(parser, path=None):
 
 
 try:
-    SETTING_VALUES, CONFIG_PROBLEMS = load_settings(read_user_config())
+    USER_CONFIG_PARSER = read_user_config()        # kept: the [languages] section is read further down, where the file name check exists
+    SETTING_VALUES, CONFIG_PROBLEMS = load_settings(USER_CONFIG_PARSER)
 except ConfigError as _config_error:
     sys.stderr.write('error: %s\n' % _config_error)
     sys.exit(1)
@@ -553,7 +554,7 @@ LANG_TABLE = {'en': 'English',   # English
 VALID_OS_TYPES = ['windows', 'linux', 'mac']
 MOVIE_OS_TYPE = 'video'              # the os_type of the files of a movie: they belong to no operating system
 MOVIE_FOLDER_SUFFIX = '-movie'       # added to the folder name of a movie, so that movies are recognised in the library folder
-VALID_LANG_TYPES = list(LANG_TABLE.keys())
+VALID_LANG_TYPES = list(LANG_TABLE.keys())     # the languages of the [languages] section of the config file are added further down (EXTRA_LANGUAGES)
 
 lineSep = "\n"
 
@@ -777,15 +778,20 @@ def filter_languages(entries, valid_langs, fallback_lang=None):
     return [entry for entry in entries
             if entry.os_type == MOVIE_OS_TYPE or entry.lang in valid_langs or (entry.lang == fallback_lang and entry.os_type not in covered)]
 
-def apply_os_lang_defaults(args):
+def apply_os_lang_defaults(args, keep_everything=False):
     """Fill in args.os and args.lang for the commands that filter by operating system and language.
 
-    -os / -lang given: used as they are. Only -skipos / -skiplang given: every os / language except those.
-    Neither: this computer's operating system and the user's language (windows / en if they cannot be detected).
+    -os / -lang given (also in the config file): used as they are; the value `all` was turned into every operating system / language when the arguments were checked.
+    Only -skipos / -skiplang given: every os / language except those.
+    Neither: this computer's operating system and the user's language (windows / en if they cannot be detected) - except for `update` (keep_everything): the manifest records everything
+    that GOG offers, and download, verify, import and backup choose when they read it (0.5.94; before, update kept only this computer's system and language).
     Refactoring: replaces five copies of this logic in main() that disagreed about the default."""
     if not args.os:
         if args.skipos:
             args.os = [x for x in VALID_OS_TYPES if x not in args.skipos]
+        elif keep_everything:
+            args.os = list(VALID_OS_TYPES)
+            info("no -os given, keeping every operating system (%s). Use -os to keep fewer, e.g. -os windows linux" % ', '.join(args.os))
         else:
             os_name, source = detect_os()
             args.os = [os_name]
@@ -795,6 +801,9 @@ def apply_os_lang_defaults(args):
     if not args.lang:
         if args.skiplang:
             args.lang = [x for x in VALID_LANG_TYPES if x not in args.skiplang]
+        elif keep_everything:
+            args.lang = list(VALID_LANG_TYPES)
+            info("no -lang given, keeping every language. Use -lang to keep fewer, e.g. -lang en de")
         else:
             lang, source = detect_lang()
             args.lang = [lang]
@@ -2783,6 +2792,11 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
     valid_langs = []
     for lang in lang_list:
         valid_langs.append(LANG_TABLE[lang])
+    if set(VALID_LANG_TYPES) <= set(lang_list):
+        # Nobody narrowed the languages (0.5.94: the default of update): a language that GOG offers and that has no code (yet) is kept too, under the name GOG sends. download,
+        # verify, ... can only choose it once it has a code ([languages] in the config file); the entries are there then, without update --full.
+        known_names = set(LANG_TABLE.values())
+        valid_langs = valid_langs + [name for name in downloads_dict if name not in known_names]
 
     # Refactoring: with a fallback language every operating system gets the wanted languages if GOG offers it in
     # one of them, and the fallback language otherwise. Decided here, on GOG's data, before any file info is fetched.
@@ -3184,7 +3198,17 @@ def add_common_flags(parser):
 
 
 def validate_lang_and_os(args):
-    """Exit with an error if a language/os given on the command line is unknown."""
+    """Exit with an error if a language/os given on the command line (or in the config file) is unknown. The value `all` stands for every operating system / language
+    (for `list`, which filters only when it is asked to: no filter); it cannot be combined with other values."""
+    for option, values in (('-lang', args.lang), ('-os', args.os)):
+        if 'all' in values and len(values) > 1:
+            error('error: %s all cannot be combined with other values (%s)' % (option, ' '.join(values)))
+            raise SystemExit(1)
+    if args.lang == ['all']:
+        args.lang = [] if args.command == 'list' else list(VALID_LANG_TYPES)
+    if args.os == ['all']:
+        args.os = [] if args.command == 'list' else list(VALID_OS_TYPES)
+
     for lang in args.lang + args.skiplang:
         if lang not in VALID_LANG_TYPES:
             error('error: specified language "%s" is not one of the valid languages %s' % (lang, VALID_LANG_TYPES))
@@ -3663,10 +3687,10 @@ def build_parser():
     g1.add_argument('-md5xmls',action="store_true",help="Downloads the MD5 XML files for each item (where available) and outputs them to " + MD5_DIR_NAME)
     g1.add_argument('-nochangelogs',action="store_true",help="Skips saving the changelogs for games")
     g2 = g1.add_mutually_exclusive_group()
-    g2.add_argument('-os', action='extend', help="operating system(s) (default: the operating system of this computer)", nargs='*', default=[])
+    g2.add_argument('-os', action='extend', help="operating system(s) to keep in the manifest (default: all; `all` also works)", nargs='*', default=[])
     g2.add_argument('-skipos', action='store', help='skip operating system(s)', nargs='*', default=[])
     g3 = g1.add_mutually_exclusive_group()
-    g3.add_argument('-lang', action='extend', help="game language(s) (default: the language of your system, en if unknown)", nargs='*', default=[])
+    g3.add_argument('-lang', action='extend', help="game language(s) to keep in the manifest (default: all; `all` also works)", nargs='*', default=[])
     g3.add_argument('-skiplang', action='store', help='skip game language(s)', nargs='*', default=[])
     g1.add_argument('-skiphidden',action='store_true',help='skip games marked as hidden')
     g1.add_argument('-installers', action='store', choices = ['standalone','both'], default = 'standalone',  help='GOG Installer type to use: standalone or both galaxy and standalone. Default: standalone (Deprecated)')
@@ -3967,8 +3991,8 @@ def apply_config_flags(parser, commands, config, argv, path=None, build=None):
     command = explicit.get('command')
     problems, notes = [], []
     for section in config.sections():
-        if section not in ('settings', 'common') and section not in commands.choices:
-            problems.append("config file %s: [%s] is not a command, ignored (sections: settings, common, %s)"
+        if section not in ('settings', 'languages', 'common') and section not in commands.choices:
+            problems.append("config file %s: [%s] is not a command, ignored (sections: settings, languages, common, %s)"
                             % (path, section, ', '.join(commands.choices)))
     if command not in commands.choices:
         return notes, problems
@@ -4238,6 +4262,9 @@ def default_config_text(commands):
         for key in keys:
             kind, default = SETTING_KEYS[key][1], SETTING_KEYS[key][2]
             lines.append('%s = %s' % (key, format_setting(kind, default)))
+    lines += ['', '[languages]', _wrapped_comment(
+        'Extra languages that GOG offers and the program does not know (the warning at the end of update names them): "code = name", the name exactly as GOG sends it. '
+        'The code is what you type for -lang: 1 to 16 lower-case letters, digits or _, not a built-in code.'), '; xx = Klingon']
     explained = set()
     shared = shared_options(commands)
     common, first_command = [], {}
@@ -5449,6 +5476,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
     # the properties record. Failed game entries intentionally remain pending.
     resumeprop['complete'] = len(resumedb) == 1
     save_resume_manifest(resumedb)
+    note_unknown_languages(sorted_gamesdb)          # what the whole manifest holds, also for the games this run did not fetch again
     flush_summarised()
     if not resumeprop['complete']:
         pending_count = len(resumedb) - 1
@@ -5939,6 +5967,79 @@ def _windows_path_limit_in_effect():
             return winreg.QueryValueEx(key, 'LongPathsEnabled')[0] != 1
     except (ImportError, OSError):
         return True
+
+
+# ---------------------------------------------------------------------------------------------
+# Languages: the table at the top holds the names GOG uses; the config file can add more
+# ---------------------------------------------------------------------------------------------
+LANGUAGE_CODE_PATTERN = re.compile(r'[a-z][a-z0-9_]{0,15}\Z')
+
+
+def load_extra_languages(parser, existing, path=None):
+    """{code: name} of the [languages] section of the config file ("code = name"), checked against the languages that exist (`existing`, code -> name).
+    Raises ConfigError for an entry that cannot be used: a code that is not 1-16 lower-case letters, digits or _ (starting with a letter), a code that is a built-in one with another
+    name, a name that has another code already, a name that cannot be a folder name (the MD5 XML tree has a folder per language). An empty value means "not set"."""
+    path = path or user_config_path()
+    extra = {}
+    if parser is None or not parser.has_section('languages'):
+        return extra
+    names = dict((name, code) for code, name in existing.items())
+    for code, text in parser.items('languages'):
+        name = text.strip()
+        if not name:
+            continue
+
+        def fail(why):
+            raise ConfigError('config file %s: [languages] %s = %s: %s' % (path, code, name, why))
+        if not LANGUAGE_CODE_PATTERN.match(code):
+            fail('the code must be 1 to 16 lower-case letters, digits or _, starting with a letter')
+        if existing.get(code) == name:
+            continue                                      # the same as the built-in entry: nothing to add
+        if code in existing:
+            fail("'%s' is a built-in code (%s); choose another code" % (code, existing[code]))
+        reason = unsafe_file_name_reason(name)
+        if reason:
+            fail('%s (the name is also used as a folder name)' % reason)
+        if name in names:
+            fail("this name has the code '%s' already" % names[name])
+        extra[code] = name
+        names[name] = code
+    return extra
+
+
+try:
+    EXTRA_LANGUAGES = load_extra_languages(USER_CONFIG_PARSER, LANG_TABLE)
+except ConfigError as _config_error:
+    sys.stderr.write('error: %s\n' % _config_error)
+    sys.exit(1)
+LANG_TABLE.update(EXTRA_LANGUAGES)
+VALID_LANG_TYPES.extend(code for code in EXTRA_LANGUAGES)       # the same list object: whoever holds it sees the new codes
+
+
+def unknown_language_names(gamesdb):
+    """{language name: [game titles]} for every language name in the manifest (what GOG offers for a game: available_langs) that is not in LANG_TABLE.
+    Files in such a language are never downloaded: filter_downloads only keeps the languages that have a code."""
+    known = set(LANG_TABLE.values())
+    found = {}
+    for game in gamesdb:
+        for names in (game.get('available_langs') or {}).values():
+            for name in names or []:
+                if isinstance(name, str) and name not in known:
+                    titles = found.setdefault(name, [])
+                    if game.get('title') not in titles:
+                        titles.append(game.get('title'))
+    return found
+
+
+UNKNOWN_LANGUAGE_MESSAGE = ("GOG offers files in {count} language name(s) that this program does not know, so those files are not downloaded: {items}. To use one, add a line "
+                            "'code = name' (the name as shown here) under [languages] in the config file, then use the code with -lang.")
+
+
+def note_unknown_languages(gamesdb):
+    """One combined warning for the language names of the manifest that are not in LANG_TABLE (see unknown_language_names)."""
+    for name, titles in unknown_language_names(gamesdb).items():
+        where = 'in %s' % titles[0] if len(titles) == 1 else 'in %d games, e.g. %s' % (len(titles), sorted(titles, key=lambda t: str(t).lower())[0])
+        note_summarised('unknown language', '"%s" (%s)' % (_printable_name(name), where), UNKNOWN_LANGUAGE_MESSAGE)
 
 
 def _display_name(path):
@@ -8623,7 +8724,7 @@ def main(args):
         login_ok = cmd_login(args.username, args.password, browser=args.browser)
         return 0 if login_ok else 1  # no need to see time stats
     elif args.command == 'update':
-        apply_os_lang_defaults(args)
+        apply_os_lang_defaults(args, keep_everything=True)
         if (not args.skipknown) and (not args.updateonly) and (not args.standard):
             if (args.ids):
                 args.full = True
